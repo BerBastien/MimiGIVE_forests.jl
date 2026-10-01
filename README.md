@@ -9,7 +9,7 @@ You need to install [Julia](https://julialang.org/) version 1.6 to run this mode
 To add the package to your current environment, run the following command at the julia package REPL:
 
 ```julia
-pkg> add MimiGIVE
+ add MimiGIVE
 
 ```
 You probably also want to install the Mimi package into your julia environment, so that you can use some of the tools from that package:
@@ -33,6 +33,7 @@ m = MimiGIVE.get_model()
 
 # Run the model
 run(m)
+
 
 # Explore interactive plots of all the model output.
 explore(m)

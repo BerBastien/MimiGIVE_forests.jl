@@ -66,7 +66,8 @@ function get_model(; Agriculture_gtap::String = "midDF",
                     RFFSPsample::Union{Nothing, Int} = nothing,
                     Agriculture_floor_on_damages::Bool = true,
                     Agriculture_ceiling_on_benefits::Bool = false,
-                    vsl::Symbol= :epa
+                    vsl::Symbol= :epa,
+                    forest_emulator::Union{Nothing, Symbol} = nothing
                 )
 
     # --------------------------------------------------------------------------
@@ -245,6 +246,35 @@ function get_model(; Agriculture_gtap::String = "midDF",
     add_comp!(m, GlobalNetConsumption, :global_netconsumption, first = damages_first, after=:DamageAggregator)
     add_comp!(m, RegionalNetConsumption, :regional_netconsumption, first = damages_first, after=:global_netconsumption)
     add_comp!(m, CountryNetConsumption, :country_netconsumption, first = damages_first, after = :regional_netconsumption)
+if forest_emulator !== nothing
+    reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
+    country_idx = Dict(c => i for (i, c) in enumerate(countries))
+
+    set_dimension!(m, :forest_regions, nrow(reg))
+    set_dimension!(m, :services, 4)
+    add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2100, after = :TempNorm_1995to2005)
+
+    connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
+    connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
+    connect_param!(m, :ForestEmulator, :pc_gdp, :PerCapitaGDP, :pc_gdp)
+
+    update_param!(m, :ForestEmulator, :region_country, [get(country_idx, i, 0) for i in reg.iso])
+    update_param!(m, :ForestEmulator, :A_Mha, reg.region_area_ha ./ 1e6)
+    update_param!(m, :ForestEmulator, :F0, reg.forest_Mha_2022)
+    update_param!(m, :ForestEmulator, :b1, reg.forest_b1_Mha_per_C)
+    update_param!(m, :ForestEmulator, :b2, reg.forest_b2_Mha_per_C2)
+    update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
+    update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
+    update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
+
+    mv_cols = [:rec_usd_ha_yr_2020, :hab_usd_ha_yr_2020, :nwfp_usd_ha_yr_2020, :wat_usd_ha_yr_2020]
+    mv_mat = hcat([Float64.(coalesce.(reg[!, c], 0.0)) for c in mv_cols]...)
+    mv_mat[.!isfinite.(mv_mat)] .= 0.0
+
+    update_param!(m, :ForestEmulator, :mv, mv_mat)
+    update_param!(m, :ForestEmulator, :e_gdp, [0.67, 0.79, -1.11, 2.02])
+    update_param!(m, :ForestEmulator, :e_pop, [0.72, 0.85, 0.57, 0.0])
+end
 
     # --------------------------------------------------------------------------
 	# Shared Model Parameters
