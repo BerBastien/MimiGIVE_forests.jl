@@ -250,8 +250,8 @@ if forest_emulator !== nothing
     reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
     country_idx = Dict(c => i for (i, c) in enumerate(countries))
 
-    set_dimension!(m, :forest_regions, nrow(reg))
-    set_dimension!(m, :services, 4)
+    set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
+    set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
     add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2100, after = :TempNorm_1995to2005)
 
     connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
@@ -266,6 +266,8 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
     update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
     update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
+    update_param!(m, :ForestEmulator, :pop_share, Float64.(coalesce.(reg.pop_share, 0.0)))
+    update_param!(m, :ForestEmulator, :gdp_share, Float64.(coalesce.(reg.gdp_share, 0.0)))
 
     mv_cols = [:rec_usd_ha_yr_2020, :hab_usd_ha_yr_2020, :nwfp_usd_ha_yr_2020, :wat_usd_ha_yr_2020]
     mv_mat = hcat([Float64.(coalesce.(reg[!, c], 0.0)) for c in mv_cols]...)

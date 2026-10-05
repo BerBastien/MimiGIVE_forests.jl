@@ -18,6 +18,8 @@
     mv    = Parameter(index=[forest_regions, services])   # USD2020/ha/año
     e_gdp = Parameter(index=[services])
     e_pop = Parameter(index=[services])
+    pop_share = Parameter(index=[forest_regions])
+    gdp_share = Parameter(index=[forest_regions])
 
     # --- Variables ---
     T_ref     = Variable()
@@ -30,6 +32,10 @@
     country_co2_flow   = Variable(index=[time, country])         # t CO2/año
     country_value      = Variable(index=[time, country, services])  # USD/ha × Mha = 1e6 USD/año
     country_value_nocl = Variable(index=[time, country, services])  # bosque fijo, socio evolutiva
+    ir_forest_Mha = Variable(index=[time, forest_regions])
+    ir_value      = Variable(index=[time, forest_regions, services])
+    ir_pop        = Variable(index=[time, forest_regions])
+    ir_gdppc      = Variable(index=[time, forest_regions])
 
     function run_timestep(p, v, d, t)
         if is_first(t)
@@ -40,12 +46,16 @@
             end
         end
 
-        v.country_forest_Mha[t, :] .= 0.0
-        v.country_co2_flow[t, :]   .= 0.0
+        v.country_forest_Mha[t, :]    .= 0.0
+        v.country_co2_flow[t, :]      .= 0.0
         v.country_value[t, :, :]      .= 0.0
         v.country_value_nocl[t, :, :] .= 0.0
 
-        # factor de crecimiento por país y servicio (relativo a 2022)
+        v.ir_forest_Mha[t, :] .= 0.0
+        v.ir_value[t, :, :]   .= 0.0
+        v.ir_pop[t, :]        .= 0.0
+        v.ir_gdppc[t, :]      .= 0.0
+
         fac = zeros(length(d.country), 4)
         for c in d.country, s in 1:4
             pr = p.population[t, c] / v.pop0[c]
@@ -67,9 +77,17 @@
             if c > 0
                 v.country_forest_Mha[t, c] += F
                 v.country_co2_flow[t, c]   += flow
+
+                v.ir_forest_Mha[t, r] = F
+                v.ir_pop[t, r]   = p.population[t, c] * p.pop_share[r]
+                v.ir_gdppc[t, r] = p.pop_share[r] > 0 ?
+                    p.pc_gdp[t, c] * p.gdp_share[r] / p.pop_share[r] : 0.0
+
                 for s in 1:4
-                    v.country_value[t, c, s]      += p.mv[r, s] * fac[c, s] * F
+                    val = p.mv[r, s] * fac[c, s] * F
+                    v.country_value[t, c, s]      += val
                     v.country_value_nocl[t, c, s] += p.mv[r, s] * fac[c, s] * p.F0[r]
+                    v.ir_value[t, r, s] = val
                 end
             end
         end
