@@ -99,7 +99,17 @@ The relevant arguments above are described as:
     then the agricultural benefits (positive values of the `agcost` variable) in 
     each timestep will not be allowed to exceed 100% of the size of the agricultural 
     sector in each region.
-    
+
+**Forest and Non-value ecosistem services**
+- forest_emulator (default nothing) - If set to `:jules`, `:lpjml` or `:mc2`, adds the `ForestEmulator`    component
+    (2022-2100) using the regional table `data/Forest/regions_<name>.csv`. See Section 2c.
+
+```julia    
+vsl::Symbol= :epa,
+forest_emulator::Union{Nothing, Symbol} = nothing
+```  
+
+
 **Other**
 
 - vsl (default :epa) - Specify the soruce of the value of statistical life (VSL) being used in the model. The default `:epa` uses the 2017 VSL used in U.S. EPA anlayses. Alternatively, one could use `:fund`. Both are described in the `DataExplainer` along with references to the underlying values.
@@ -135,6 +145,35 @@ run(m_ciam)
 # instead
 explore(m_ciam) 
 ```
+
+## 2c. Forest and Ecosystem Services Emulator
+
+`ForestEmulator` (`src/components/forest_emulator.jl`) maps global mean temperature to forest area and
+ecosystem service values at the impact-region (IR) level, for 2022-2100. It is optional and does not alter
+the other components.
+
+```julia
+m = MimiGIVE.get_model(socioeconomics_source = :SSP, SSP_scenario = "SSP245", forest_emulator = :jules)
+run(m)
+
+forest_Mha = m[:ForestEmulator, :ir_forest_Mha]   # time x IR
+value      = m[:ForestEmulator, :ir_value]        # time x IR x service (rec, hab, nwfp, wat)
+```
+
+**Inputs.** Temperature `T` from the FAIR `temperature` component, and population and GDP per capita from
+`Socioeconomic` and `PerCapitaGDP`. Region parameters come from `regions_jules.csv`, `regions_mc2.csv`, `regions_lpjml.csv`.
+
+**Equations.** With `x = T(t) - T(2022)`:
+
+    F(r,t)   = min(A(r), max(0, F0(r) + b1(r)·x + b2(r)·x²))                [Mha]
+    V(r,s,t) = mv(r,s) · fac(c,s,t) · F(r,t)                               [million USD2020/yr]
+    fac      = (pcGDP(c,t)/pcGDP(c,2022))^e_gdp(s) · (pop(c,t)/pop(c,2022))^e_pop(s)
+
+with services s = rec, hab, nwfp, wat, `e_gdp = [0.67, 0.79, -1.11, 2.02]` and `e_pop = [0.72, 0.85, 0.57, 0.0]`.
+Vegetation carbon (`C0, c1, c2`) gives the CO2 flow `(C_t - C_{t-1})·44/12` (t CO2/yr), reported by country
+and globally. IRs with no country (`region_country = 0`) enter only the global totals.
+
+
 
 # 3. Running a Monte Carlo Simulation (MCS)
 
@@ -245,6 +284,30 @@ Currently, this Monte Carlo Simulation includes the following uncertain paramete
 - Mortality: uncertainty using resampled parameterization of damage function for Cromar et al.
 
 - Global Damage Functions: uncertainty in Nordhaus (2017) and Howard and Sterner (2017) is derived from the parametric parameter uncertainty as stated in the corresponding publication and replication code.
+
+## 3d. Forest Emulator Monte Carlo (`scripts/runforest_mcs.jl`)
+
+Runs the GIVE temperature MCS for each SSP and propagates every temperature trajectory through the
+`ForestEmulator` for the three vegetation models (`:jules`, `:lpjml`, `:mc2`). With the SSP source only
+the FAIR parameter set is random; socioeconomics is deterministic.
+
+```julia
+include("scripts/runforest_mcs.jl")
+run_all(n = 10_000)      # n = nothing uses each of the 2237 FAIR sets once
+```
+
+Output: `forest_mcs_output/forest_ir_<SSP>.csv`, with mean and p05/p25/p50/p75/p95 across trials of
+temperature `T`, forest area `F_Mha` (Mha) and the four services (million USD2020/yr), by IR, year and
+vegetation model. Notes:
+
+- FAIR has 2237 parameter sets, so the `n` trials are drawn with replacement and contain at most 2237
+  distinct trajectories; quantiles are a resampling of those, not `n` independent runs.
+- The same seed is used in every SSP, so scenarios share the same FAIR draws.
+- `T` is absolute FAIR temperature; the emulator uses the anomaly relative to 2022, so uncertainty in
+  forest area and value is zero in 2022.
+- IRs without a country are omitted, so the sum of `F_Mha` over IRs is not the global total.
+- The minimal model used internally is checked against the component inside full GIVE (`rtol = 1e-8`).
+- Intermediate files are cached in `partial/`; delete them if you change `out_years` or `block`.
 
 # 4. Calculating the SCC
 
@@ -479,3 +542,21 @@ _Non-default options to use for comparisons etc._
 - Citation: Nordhaus, W. D. (2017). Revisiting the social cost of carbon. Proceedings of the National Academy of Sciences, 114(7), 1518-1523.
 
 - Citation: Howard, P. H., & Sterner, T. (2017). Few and not so far between: a meta-analysis of climate damage estimates. Environmental and Resource Economics, 68(1), 197-225.
+
+### Forest emulator
+-khsaj
+## Dynamic global vegetation models (Jules, lpjml and mc2)
+
+# Jules
+- Citation: Clark, D. B., Mercado, L. M., Sitch, S., Jones, C. D., Gedney, N., Best, M. J., Pryor, M., Rooney, G. G., Essery, R. L. H., Blyth, E., Boucher, O., Harding, R. J., Huntingford, C., & Cox, P. M. (2011). The Joint UK Land Environment Simulator (JULES), model description – Part 2: Carbon fluxes and vegetation dynamics. Geoscientific Model Development, 4, 701–722. https://doi.org/10.5194/gmd-4-701-2011.
+
+# LPJmL5-7-10-fire
+- Citation: Wirth, S., Braun, J., Heinke, J., Ostberg, S., Rolinski, S., Schaphoff, S., Stenzel, F., von Bloh, W., Müller, C., Taube, F., et al. (2024). Biological nitrogen fixation of natural and agricultural vegetation simulated with LPJmL 5.7.9. Geoscientific Model Development, 17, 7889–7914. https://doi.org/10.5194/gmd-17-7889-2024.
+- ISIMIP. LPJmL5-7-10-fire. The Inter-Sectoral Impact Model Intercomparison Project (ISIMIP). Potsdam Institute for Climate Impact Research. Accessed October 8, 2026. 
+
+# MC2-USFS
+- Citation: Kim, J. B., Kerns, B. K., Drapek, R. J., Pitts, G. S., & Halofsky, J. E. (2018). Simulating vegetation response to climate change in the Blue Mountains with MC2 dynamic global vegetation model. Climate Services, 10, 20–32. https://doi.org/10.1016/j.cliser.2018.04.001 
+
+# Impact Regions (CIL)
+
+- Citation: Rode, A., Carleton, T. A., Delgado, M., Greenstone, M., Houser, T., Hsiang, S., et al. (2021). Estimating a social cost of carbon for global energy consumption. Nature, 598, 308–314. https://doi.org/10.1038/s41586-021-03883-8

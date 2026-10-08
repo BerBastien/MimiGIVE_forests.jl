@@ -54,6 +54,8 @@ function save_scc_data(outdir::String;
                         CIAM_GDPcap::Bool = false,
                         pulse_size::Float64=1.
                     )
+
+    isnothing(year) && throw(ArgumentError("year must be specified for SCC calculations"))
     
     df = DataFrame(:dr_label => [], :prtp => [], :eta => [], :sector => [], :scc => [])
 
@@ -65,32 +67,33 @@ function save_scc_data(outdir::String;
         append!(df, DataFrame(:dr_label => k.dr_label, :prtp => k.prtp, :eta => k.eta, :sector => :global, :scc => v))
     end
 
-    # check which sectors are true
-    run(m)
-    included_sectors = []
-    for sector in [:energy, :ag, :cromar_mortality, :slr]
-        if m[:DamageAggregator, Symbol(:include_, sector)]
-            push!(included_sectors, sector) # add to the list
-            update_param!(m, :DamageAggregator, Symbol(:include_, sector), false) # turn it off
-        end
-    end
+    sectors = [:energy, :ag, :cromar_mortality, :slr]
+    original_sector_flags = Dict(
+        sector => m[:DamageAggregator, Symbol(:include_, sector)]
+        for sector in sectors
+    )
 
-    # sectoral
-    for sector in included_sectors
-        update_param!(m, :DamageAggregator, Symbol(:include_, sector), true)
-        results = MimiGIVE.compute_scc(m; year=year, last_year=last_year, discount_rates=discount_rates,
-                            gas=gas, CIAM_foresight=CIAM_foresight, CIAM_GDPcap=CIAM_GDPcap,
-                            pulse_size=pulse_size)
-        for (k,v) in results
-            append!(df, DataFrame(:dr_label => k.dr_label, :prtp => k.prtp, :eta => k.eta, :sector => sector, :scc => v))
+    try
+        run(m)
+        included_sectors = [sector for sector in sectors if original_sector_flags[sector]]
+        for sector in included_sectors
+            update_param!(m, :DamageAggregator, Symbol(:include_, sector), false)
         end
-        update_param!(m, :DamageAggregator, Symbol(:include_, sector), false)
-    end
 
-    # turn back on so m is unchanged
-    for sector in included_sectors
-        if m[:DamageAggregator, Symbol(:include_, sector)]
-            update_param!(m, :DamageAggregator, Symbol(:include_, sector), true) # turn it on
+        # Compute each sector with only that sector enabled.
+        for sector in included_sectors
+            update_param!(m, :DamageAggregator, Symbol(:include_, sector), true)
+            results = MimiGIVE.compute_scc(m; year=year, last_year=last_year, discount_rates=discount_rates,
+                                gas=gas, CIAM_foresight=CIAM_foresight, CIAM_GDPcap=CIAM_GDPcap,
+                                pulse_size=pulse_size)
+            for (k,v) in results
+                append!(df, DataFrame(:dr_label => k.dr_label, :prtp => k.prtp, :eta => k.eta, :sector => sector, :scc => v))
+            end
+            update_param!(m, :DamageAggregator, Symbol(:include_, sector), false)
+        end
+    finally
+        for (sector, enabled) in original_sector_flags
+            update_param!(m, :DamageAggregator, Symbol(:include_, sector), enabled)
         end
     end
 
@@ -136,6 +139,8 @@ function save_scc_mcs_data(seed::Int, outdir::String, n::Int;
                             CIAM_GDPcap::Bool = false,
                             pulse_size::Float64 = 1.,
                         )
+
+    isnothing(year) && throw(ArgumentError("year must be specified for SCC calculations"))
 
     Random.seed!(seed)
     results = MimiGIVE.compute_scc(m;
