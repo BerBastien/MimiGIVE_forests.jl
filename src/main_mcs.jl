@@ -45,7 +45,8 @@ function get_mcs(trials;
                     rffsp_sampling::Symbol = :random,
                     rffsp_sampling_ids::Union{Vector{Int}, Nothing} = nothing,
                     save_list::Vector = [],
-                    Agriculture_gtap::String = "midDF"         
+                    Agriculture_gtap::String = "midDF",
+                    forest_emulator::Bool = false
         )
 
     # check some argument conditions
@@ -279,6 +280,18 @@ function get_mcs(trials;
     # check if we've added all FAIR parameters
     isempty(fair_samples_left) ? nothing : error("The following FAIR mcs uncertain parameters has not been added to the simulation: $(keys(fair_samples_left))")
     
+    # Bosques: incertidumbre de los coeficientes del emulador, solo si el
+    # componente ForestEmulator está en el modelo. Cada corrida sortea cuatro
+    # choques z ~ Normal(0, 1), comunes a todas las regiones; el componente
+    # calcula b = b̂ + z · SE(b̂) región por región.
+    if forest_emulator
+        for z in (:z_b1, :z_b2, :z_c1, :z_c2)
+            rv_name = Symbol("rv_forest_$z")
+            add_RV!(mcs, rv_name, Normal(0.0, 1.0))
+            add_transform!(mcs, :ForestEmulator, z, :(=), rv_name)
+        end
+    end
+
     # add the requested saved variables 
     for i in save_list
         add_save!(mcs, i)
@@ -357,6 +370,7 @@ function run_mcs(;trials::Int64 = 10000,
     end
 
     Agriculture_gtap = _get_mooreag_gtap(m)
+    forest_emulator = haskey(m.md.namespace, :ForestEmulator)
 
     # Get an instance of the mcs
     mcs = get_mcs(trials; 
@@ -367,7 +381,8 @@ function run_mcs(;trials::Int64 = 10000,
                     rffsp_sampling = rffsp_sampling,
                     rffsp_sampling_ids = rffsp_sampling_ids,
                     save_list = save_list,
-                    Agriculture_gtap = Agriculture_gtap
+                    Agriculture_gtap = Agriculture_gtap,
+                    forest_emulator = forest_emulator
                 )
 
     # run monte carlo trials

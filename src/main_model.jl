@@ -266,6 +266,11 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
     update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
     update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
+    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # sin dato → sin incertidumbre
+    update_param!(m, :ForestEmulator, :b1_se, se(:forest_b1_se_Mha_per_C))
+    update_param!(m, :ForestEmulator, :b2_se, se(:forest_b2_se_Mha_per_C2))
+    update_param!(m, :ForestEmulator, :c1_se, se(:cveg_b1_se_tC_per_C))
+    update_param!(m, :ForestEmulator, :c2_se, se(:cveg_b2_se_tC_per_C2))
     update_param!(m, :ForestEmulator, :pop_share, Float64.(coalesce.(reg.pop_share, 0.0)))
     update_param!(m, :ForestEmulator, :gdp_share, Float64.(coalesce.(reg.gdp_share, 0.0)))
 
