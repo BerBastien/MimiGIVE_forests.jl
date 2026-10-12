@@ -15,13 +15,13 @@
     C0    = Parameter(index=[forest_regions])
     c1    = Parameter(index=[forest_regions])
     c2    = Parameter(index=[forest_regions])
-    # Incertidumbre de la regresión de cada región (errores estándar del CSV)
+    # Regression uncertainty per region (standard errors from the CSV)
     b1_se = Parameter(index=[forest_regions])
     b2_se = Parameter(index=[forest_regions])
     c1_se = Parameter(index=[forest_regions])
     c2_se = Parameter(index=[forest_regions])
-    # Choques estandarizados ~ Normal(0, 1) que sortea el Monte Carlo.
-    # En 0 (valor por defecto) el modelo es idéntico al determinístico.
+    # Standardized shocks ~ Normal(0, 1), sampled by the Monte Carlo.
+    # At 0 (default) the model is identical to the deterministic run.
     z_b1 = Parameter(default = 0.0)
     z_b2 = Parameter(default = 0.0)
     z_c1 = Parameter(default = 0.0)
@@ -78,7 +78,7 @@
         gQ = 0.0
         x = p.temperature[t] - v.T_ref
         for r in d.forest_regions
-            # Coeficiente de esta corrida = estimación + choque × error estándar
+            # Coefficient for this run = estimate + shock × standard error
             b1 = p.b1[r] + p.z_b1 * p.b1_se[r]
             b2 = p.b2[r] + p.z_b2 * p.b2_se[r]
             c1 = p.c1[r] + p.z_c1 * p.c1_se[r]

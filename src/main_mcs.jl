@@ -280,10 +280,10 @@ function get_mcs(trials;
     # check if we've added all FAIR parameters
     isempty(fair_samples_left) ? nothing : error("The following FAIR mcs uncertain parameters has not been added to the simulation: $(keys(fair_samples_left))")
     
-    # Bosques: incertidumbre de los coeficientes del emulador, solo si el
-    # componente ForestEmulator está en el modelo. Cada corrida sortea cuatro
-    # choques z ~ Normal(0, 1), comunes a todas las regiones; el componente
-    # calcula b = b̂ + z · SE(b̂) región por región.
+    # Forests: uncertainty in the emulator coefficients, only when the
+    # ForestEmulator component is in the model. Each trial samples four
+    # shocks z ~ Normal(0, 1), shared by all regions; the component computes
+    # b = b̂ + z · SE(b̂) region by region.
     if forest_emulator
         for z in (:z_b1, :z_b2, :z_c1, :z_c2)
             rv_name = Symbol("rv_forest_$z")
