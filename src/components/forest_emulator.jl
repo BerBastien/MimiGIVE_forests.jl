@@ -15,6 +15,17 @@
     C0    = Parameter(index=[forest_regions])
     c1    = Parameter(index=[forest_regions])
     c2    = Parameter(index=[forest_regions])
+    # Regression uncertainty per region (standard errors from the CSV)
+    b1_se = Parameter(index=[forest_regions])
+    b2_se = Parameter(index=[forest_regions])
+    c1_se = Parameter(index=[forest_regions])
+    c2_se = Parameter(index=[forest_regions])
+    # Standardized shocks ~ Normal(0, 1), sampled by the Monte Carlo.
+    # At 0 (default) the model is identical to the deterministic run.
+    z_b1 = Parameter(default = 0.0)
+    z_b2 = Parameter(default = 0.0)
+    z_c1 = Parameter(default = 0.0)
+    z_c2 = Parameter(default = 0.0)
     mv    = Parameter(index=[forest_regions, services])   # USD2020/ha/año
     e_gdp = Parameter(index=[services])
     e_pop = Parameter(index=[services])
@@ -67,8 +78,13 @@
         gQ = 0.0
         x = p.temperature[t] - v.T_ref
         for r in d.forest_regions
-            F = min(p.A_Mha[r], max(0.0, p.F0[r] + p.b1[r]*x + p.b2[r]*x^2))
-            C = max(0.0, p.C0[r] + p.c1[r]*x + p.c2[r]*x^2)
+            # Coefficient for this run = estimate + shock × standard error
+            b1 = p.b1[r] + p.z_b1 * p.b1_se[r]
+            b2 = p.b2[r] + p.z_b2 * p.b2_se[r]
+            c1 = p.c1[r] + p.z_c1 * p.c1_se[r]
+            c2 = p.c2[r] + p.z_c2 * p.c2_se[r]
+            F = min(p.A_Mha[r], max(0.0, p.F0[r] + b1*x + b2*x^2))
+            C = max(0.0, p.C0[r] + c1*x + c2*x^2)
             flow = is_first(t) ? 0.0 : (C - v.cveg_prev[r]) * 44 / 12
             v.cveg_prev[r] = C
             gF += F
