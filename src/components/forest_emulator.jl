@@ -29,6 +29,20 @@
     mv    = Parameter(index=[forest_regions, services])   # USD2020/ha/año
     e_gdp = Parameter(index=[services])
     e_pop = Parameter(index=[services])
+    # Elasticity uncertainty: robust standard errors of the meta-regression
+    # (CWON 2024 Non-Wood Forest Technical Report, Table 5.1)
+    e_gdp_se = Parameter(index=[services])
+    e_pop_se = Parameter(index=[services])
+    # One standardized shock per service ~ Normal(0, 1), sampled by the Monte Carlo
+    # (each service is a separate regression, so the shocks are independent)
+    z_egdp_rec = Parameter(default = 0.0)
+    z_egdp_hab = Parameter(default = 0.0)
+    z_egdp_nwfp = Parameter(default = 0.0)
+    z_egdp_wat = Parameter(default = 0.0)
+    z_epop_rec = Parameter(default = 0.0)
+    z_epop_hab = Parameter(default = 0.0)
+    z_epop_nwfp = Parameter(default = 0.0)
+    z_epop_wat = Parameter(default = 0.0)
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
@@ -67,11 +81,17 @@
         v.ir_pop[t, :]        .= 0.0
         v.ir_gdppc[t, :]      .= 0.0
 
+        # Elasticities for this run = estimate + shock × standard error
+        z_gdp = (p.z_egdp_rec, p.z_egdp_hab, p.z_egdp_nwfp, p.z_egdp_wat)
+        z_pop = (p.z_epop_rec, p.z_epop_hab, p.z_epop_nwfp, p.z_epop_wat)
+        e_gdp = [p.e_gdp[s] + z_gdp[s] * p.e_gdp_se[s] for s in 1:4]
+        e_pop = [p.e_pop[s] + z_pop[s] * p.e_pop_se[s] for s in 1:4]
+
         fac = zeros(length(d.country), 4)
         for c in d.country, s in 1:4
             pr = p.population[t, c] / v.pop0[c]
             gr = p.pc_gdp[t, c] / v.gdp0[c]
-            fac[c, s] = (isfinite(pr) && isfinite(gr)) ? gr^p.e_gdp[s] * pr^p.e_pop[s] : 0.0
+            fac[c, s] = (isfinite(pr) && isfinite(gr)) ? gr^e_gdp[s] * pr^e_pop[s] : 0.0
         end
 
         gF = 0.0
