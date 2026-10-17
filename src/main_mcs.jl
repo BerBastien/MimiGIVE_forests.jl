@@ -285,7 +285,9 @@ function get_mcs(trials;
     # shocks z ~ Normal(0, 1), shared by all regions; the component computes
     # b = b̂ + z · SE(b̂) region by region.
     if forest_emulator
-        for z in (:z_b1, :z_b2, :z_c1, :z_c2)
+        for z in (:z_b1, :z_b2, :z_c1, :z_c2,
+                  :z_egdp_rec, :z_egdp_hab, :z_egdp_nwfp, :z_egdp_wat,
+                  :z_epop_rec, :z_epop_hab, :z_epop_nwfp, :z_epop_wat)
             rv_name = Symbol("rv_forest_$z")
             add_RV!(mcs, rv_name, Normal(0.0, 1.0))
             add_transform!(mcs, :ForestEmulator, z, :(=), rv_name)

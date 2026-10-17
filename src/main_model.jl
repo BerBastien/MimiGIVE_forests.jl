@@ -281,6 +281,10 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :mv, mv_mat)
     update_param!(m, :ForestEmulator, :e_gdp, [0.67, 0.79, -1.11, 2.02])
     update_param!(m, :ForestEmulator, :e_pop, [0.72, 0.85, 0.57, 0.0])
+    # Robust standard errors, CWON 2024 Non-Wood Forest Technical Report, Table 5.1
+    # (water has no population term, so its SE is 0)
+    update_param!(m, :ForestEmulator, :e_gdp_se, [0.25, 0.33, 0.17, 0.63])
+    update_param!(m, :ForestEmulator, :e_pop_se, [0.10, 0.20, 0.08, 0.0])
 end
 
     # --------------------------------------------------------------------------
