@@ -27,6 +27,7 @@ using Mimi
     include_energy = Parameter{Bool}(default=true)
     include_dice2016R2 = Parameter{Bool}(default=false)
     include_hs_damage = Parameter{Bool}(default=false)
+    include_forest = Parameter{Bool}(default=false)   # forest market damages (needs forest_emulator)
 
     damage_cromar_mortality = Parameter(index=[time,country], unit="US\$2005/yr")
     damage_ag = Parameter(index=[time,fund_regions], unit="billion US\$2005/yr")
@@ -34,6 +35,8 @@ using Mimi
     damage_energy = Parameter(index=[time,energy_countries], unit="billion US\$2005/yr")
     damage_dice2016R2 = Parameter(index=[time], unit="billion US\$2005/yr")
     damage_hs = Parameter(index=[time], unit="billion US\$2005/yr")
+    damage_forest = Parameter(index=[time,country], unit="US\$2005/yr")
+    damage_forest_regions = Parameter(index=[time,fund_regions], unit="US\$2005/yr")
 
     # damages aggregated by fund regions
     damage_cromar_mortality_regions = Parameter(index=[time,fund_regions], unit="US\$2005/yr")
@@ -51,11 +54,13 @@ using Mimi
     cromar_mortality_damage         = Variable(index=[time], unit="US\$2005/yr")
     agriculture_damage              = Variable(index=[time], unit="US\$2005/yr")
     energy_damage                   = Variable(index=[time], unit="US\$2005/yr")
+    forest_damage                   = Variable(index=[time], unit="US\$2005/yr")
 
     # domestic annual aggregates - for interim model outputs and partial SCCs
     cromar_mortality_damage_domestic         = Variable(index=[time], unit="US\$2005/yr")
     agriculture_damage_domestic              = Variable(index=[time], unit="US\$2005/yr")
     energy_damage_domestic                   = Variable(index=[time], unit="US\$2005/yr")
+    forest_damage_domestic                   = Variable(index=[time], unit="US\$2005/yr")
   
     function init(p,v,d)
         # convert to integers for indexing - do once here for speed
@@ -70,8 +75,12 @@ using Mimi
             v.total_damage_regions[t,r] = 
                 (p.include_cromar_mortality ? p.damage_cromar_mortality_regions[t,r] : 0.) +
                 (p.include_ag               ? p.damage_ag[t,r] * 1e9 : 0.) +
-                (p.include_energy           ? p.damage_energy_regions[t,r] * 1e9 : 0.)
+                (p.include_energy           ? p.damage_energy_regions[t,r] * 1e9 : 0.) +
+                (p.include_forest           ? p.damage_forest_regions[t,r] : 0.)
         end
+
+        # forest emulator runs 2022–2100: missing outside that span counts as 0
+        forest_t = coalesce.(p.damage_forest[t,:], 0.)
 
         # country level aggregates where ag damages disaggregated via method in
         # AgricultureDamagesDisaggregator
@@ -79,17 +88,20 @@ using Mimi
         v.total_damage_countries[t,:] =
             (p.include_cromar_mortality ? p.damage_cromar_mortality[t,:] : fill(0., num_countries)) +
             (p.include_ag               ? p.damage_ag_countries[t,:] * 1e9 : fill(0., num_countries)) +
-            (p.include_energy           ? p.damage_energy[t,:] * 1e9 : fill(0., num_countries))
+            (p.include_energy           ? p.damage_energy[t,:] * 1e9 : fill(0., num_countries)) +
+            (p.include_forest           ? forest_t : fill(0., num_countries))
 
         # global annual aggregates - for interim model outputs and partial SCCs
         v.cromar_mortality_damage[t]        = sum(p.damage_cromar_mortality[t,:])
         v.agriculture_damage[t]             = sum(p.damage_ag[t,:]) * 1e9 
         v.energy_damage[t]                  = sum(p.damage_energy[t,:]) * 1e9
+        v.forest_damage[t]                  = sum(forest_t)
 
         v.total_damage[t] =
             (p.include_cromar_mortality ? v.cromar_mortality_damage[t] : 0.) +
             (p.include_ag               ? v.agriculture_damage[t] : 0.) +
             (p.include_energy           ? v.energy_damage[t] : 0.) +
+            (p.include_forest           ? v.forest_damage[t] : 0.) +
             (p.include_dice2016R2       ? p.damage_dice2016R2[t] * 1e9 : 0.) +
             (p.include_hs_damage        ? p.damage_hs[t] * 1e9 : 0.)
 
@@ -101,11 +113,13 @@ using Mimi
         v.cromar_mortality_damage_domestic[t]           = sum(p.damage_cromar_mortality[t, v.domestic_idxs_country_dim_int])
         v.agriculture_damage_domestic[t]                = p.damage_ag[t,1] * 1e9 
         v.energy_damage_domestic[t]                     = sum(p.damage_energy[t, v.domestic_idxs_energy_countries_dim_int] * 1e9)
+        v.forest_damage_domestic[t]                     = sum(forest_t[v.domestic_idxs_country_dim_int])
         
         # Calculate domestic damages
         v.total_damage_domestic[t] =
             (p.include_cromar_mortality ? v.cromar_mortality_damage_domestic[t] : 0.) +
             (p.include_ag               ? v.agriculture_damage_domestic[t] : 0.) +
-            (p.include_energy           ? v.energy_damage_domestic[t] : 0.)
+            (p.include_energy           ? v.energy_damage_domestic[t] : 0.) +
+            (p.include_forest           ? v.forest_damage_domestic[t] : 0.)
     end
 end

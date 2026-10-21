@@ -43,6 +43,10 @@
     z_epop_hab = Parameter(default = 0.0)
     z_epop_nwfp = Parameter(default = 0.0)
     z_epop_wat = Parameter(default = 0.0)
+    # Forest damages to consumption (market part of the services)
+    # damage_weight[s] = share of service s counted as a market loss (0 = none, 1 = all)
+    damage_weight  = Parameter(index=[services])
+    usd2020_to_2005 = Parameter(default = 0.773)   # US GDP deflator 2005/2020 (to verify)
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
@@ -59,6 +63,8 @@
     country_value_nocl = Variable(index=[time, country, services])  # bosque fijo, socio evolutiva
     ir_forest_Mha = Variable(index=[time, forest_regions])
     ir_value      = Variable(index=[time, forest_regions, services])
+    # Climate-driven loss of market value: (value with forest fixed at 2022) − (value with climate)
+    country_damage = Variable(index=[time, country], unit="US\$2005/yr")
     ir_pop        = Variable(index=[time, forest_regions])
     ir_gdppc      = Variable(index=[time, forest_regions])
 
@@ -75,6 +81,7 @@
         v.country_co2_flow[t, :]      .= 0.0
         v.country_value[t, :, :]      .= 0.0
         v.country_value_nocl[t, :, :] .= 0.0
+        v.country_damage[t, :]        .= 0.0
 
         v.ir_forest_Mha[t, :] .= 0.0
         v.ir_value[t, :, :]   .= 0.0
@@ -129,5 +136,11 @@
         end
         v.global_forest_Mha[t] = gF
         v.global_co2_flow[t]   = gQ
+
+        # Market damage by country: 1e6 USD2020/yr → USD2005/yr
+        for c in d.country, s in 1:4
+            loss = v.country_value_nocl[t, c, s] - v.country_value[t, c, s]
+            v.country_damage[t, c] += p.damage_weight[s] * loss * 1e6 * p.usd2020_to_2005
+        end
     end
 end
