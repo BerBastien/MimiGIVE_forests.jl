@@ -50,11 +50,17 @@
     # Asymptotic ceiling on service value, as a share of country GDP (Inf = no ceiling).
     # V = V_raw / (1 + V_raw / (cap · GDP)): ≈ V_raw when small, → cap · GDP when large.
     value_cap_share = Parameter(index=[services])
+    # Ceiling calibrated to 2022, by country: the service's share of GDP may rise to at most
+    # value_cap_mult × its own 2022 share (Inf = off; must be > 1). Smooth and exact at 2022:
+    #   S = S_raw                                         if S_raw ≤ S0
+    #   S = S0 + (Smax − S0)·(1 − exp(−(S_raw − S0)/(Smax − S0)))   otherwise, Smax = mult·S0
+    value_cap_mult = Parameter(index=[services])
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
     # --- Variables ---
     T_ref     = Variable()
+    share0    = Variable(index=[country, services])   # service value / GDP in 2022
     cveg_prev = Variable(index=[forest_regions])
     pop0      = Variable(index=[country])
     gdp0      = Variable(index=[country])
@@ -144,14 +150,28 @@
         # cap · GDP and never exceeds it. Regions are scaled by their country's factor.
         k = ones(length(d.country), 4)
         for c in d.country, s in 1:4
-            cap = p.value_cap_share[s]
-            (isfinite(cap) && cap > 0) || continue
             gdp_c = p.pc_gdp[t, c] * p.population[t, c] / p.usd2020_to_2005   # million USD2020/yr
-            (isfinite(gdp_c) && gdp_c > 0) || continue
-            lim = cap * gdp_c
-            k[c, s] = 1 / (1 + v.country_value[t, c, s] / lim)
-            v.country_value[t, c, s]      *= k[c, s]
-            v.country_value_nocl[t, c, s] *= 1 / (1 + v.country_value_nocl[t, c, s] / lim)
+            ok = isfinite(gdp_c) && gdp_c > 0
+            if is_first(t)
+                v.share0[c, s] = ok ? v.country_value[t, c, s] / gdp_c : 0.0
+            end
+            ok || continue
+            mult, cap, S0 = p.value_cap_mult[s], p.value_cap_share[s], v.share0[c, s]
+            if isfinite(mult) && mult > 1 && S0 > 0
+                # calibrated ceiling: exact below the 2022 share, saturates at mult × S0
+                Smax = mult * S0
+                sat(Sr) = Sr <= S0 ? Sr : S0 + (Smax - S0) * (1 - exp(-(Sr - S0) / (Smax - S0)))
+                raw = v.country_value[t, c, s]
+                v.country_value[t, c, s]      = sat(raw / gdp_c) * gdp_c
+                v.country_value_nocl[t, c, s] = sat(v.country_value_nocl[t, c, s] / gdp_c) * gdp_c
+                k[c, s] = raw > 0 ? v.country_value[t, c, s] / raw : 1.0
+            elseif isfinite(cap) && cap > 0
+                # fixed ceiling as a share of GDP
+                lim = cap * gdp_c
+                k[c, s] = 1 / (1 + v.country_value[t, c, s] / lim)
+                v.country_value[t, c, s]      *= k[c, s]
+                v.country_value_nocl[t, c, s] *= 1 / (1 + v.country_value_nocl[t, c, s] / lim)
+            end
         end
         for r in d.forest_regions
             c = p.region_country[r]
