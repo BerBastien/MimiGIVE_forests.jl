@@ -47,6 +47,9 @@
     # damage_weight[s] = share of service s counted as a market loss (0 = none, 1 = all)
     damage_weight  = Parameter(index=[services])
     usd2020_to_2005 = Parameter(default = 0.773)   # US GDP deflator 2005/2020 (to verify)
+    # Asymptotic ceiling on service value, as a share of country GDP (Inf = no ceiling).
+    # V = V_raw / (1 + V_raw / (cap · GDP)): ≈ V_raw when small, → cap · GDP when large.
+    value_cap_share = Parameter(index=[services])
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
@@ -136,6 +139,27 @@
         end
         v.global_forest_Mha[t] = gF
         v.global_co2_flow[t]   = gQ
+
+        # Asymptotic ceiling: scale each country's service value so it approaches
+        # cap · GDP and never exceeds it. Regions are scaled by their country's factor.
+        k = ones(length(d.country), 4)
+        for c in d.country, s in 1:4
+            cap = p.value_cap_share[s]
+            (isfinite(cap) && cap > 0) || continue
+            gdp_c = p.pc_gdp[t, c] * p.population[t, c] / p.usd2020_to_2005   # million USD2020/yr
+            (isfinite(gdp_c) && gdp_c > 0) || continue
+            lim = cap * gdp_c
+            k[c, s] = 1 / (1 + v.country_value[t, c, s] / lim)
+            v.country_value[t, c, s]      *= k[c, s]
+            v.country_value_nocl[t, c, s] *= 1 / (1 + v.country_value_nocl[t, c, s] / lim)
+        end
+        for r in d.forest_regions
+            c = p.region_country[r]
+            c > 0 || continue
+            for s in 1:4
+                v.ir_value[t, r, s] *= k[c, s]
+            end
+        end
 
         # Market damage by country: 1e6 USD2020/yr → USD2005/yr
         for c in d.country, s in 1:4
