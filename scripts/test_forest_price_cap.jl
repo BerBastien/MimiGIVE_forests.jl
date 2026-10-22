@@ -7,7 +7,8 @@
 # most M times faster than income (smoothly), and leaves it as is when it grows
 # slower. Value = mv · g · (pop factor) · F stays proportional to forest area F,
 # so losing forest keeps its full cost. Set with
-# get_model(forest_price_cap_mult = [rec, hab, nwfp, wat]); Inf = off (default).
+# get_model(forest_price_cap_mult = [rec, hab, nwfp, wat]); Inf = off.
+# Default: [Inf, Inf, Inf, 3.0] (water capped at M = 3, central case).
 #
 # Checks (SSP245, JULES)
 #   1) 2022 water value identical in every row (price factor = 1 in 2022).

@@ -70,7 +70,7 @@ function get_model(; Agriculture_gtap::String = "midDF",
                     forest_emulator::Union{Nothing, Symbol} = nothing,
                     forest_damages::Bool = false,
                     forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0],
-                    forest_price_cap_mult::Vector{Float64} = fill(Inf, 4)
+                    forest_price_cap_mult::Vector{Float64} = [Inf, Inf, Inf, 3.0]
                 )
 
     # --------------------------------------------------------------------------
@@ -292,7 +292,11 @@ if forest_emulator !== nothing
     # Forest market damages to consumption (rec, hab, nwfp, wat).
     # Default: only non-wood forest products count as a market loss.
     update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
-    # Ceiling on how much faster than income the per-hectare price may grow (rec, hab, nwfp, wat); Inf = off
+    # Ceiling on how much faster than income the per-hectare price may grow (rec, hab, nwfp, wat); Inf = off.
+    # Default: water capped at M = 3 (central case; M = 2 and 5 as sensitivity). Anchor: the relative
+    # price change of forest ecosystem services, ~1.27 %/yr (Drupp et al. 2025, ERE), gives a factor
+    # of ~2.7 by 2100. The water GDP elasticity (2.02) is well above the literature (< 1; ~0.4 for
+    # water purification), which otherwise makes its value grow ~168-fold between 2022 and 2100.
     update_param!(m, :ForestEmulator, :price_cap_mult, forest_price_cap_mult)
     # The emulator runs 2022–2100; backup = 0 damage outside that span
     zero_backup = zeros(length(dim_keys(m, :time)), length(countries))
