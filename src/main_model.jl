@@ -70,7 +70,10 @@ function get_model(; Agriculture_gtap::String = "midDF",
                     forest_emulator::Union{Nothing, Symbol} = nothing,
                     forest_damages::Bool = false,
                     forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0],
-                    forest_price_cap_mult::Vector{Float64} = [Inf, Inf, Inf, 3.0]
+                    forest_price_cap_mult::Vector{Float64} = [Inf, Inf, Inf, 3.0],
+                    forest_utility_weight::Vector{Float64} = [0.0, 0.0, 0.0, 0.0],
+                    forest_ces_theta::Float64 = 1.0,
+                    forest_ces_income_price::Bool = false
                 )
 
     # --------------------------------------------------------------------------
@@ -300,6 +303,15 @@ if forest_emulator !== nothing
     # of ~2.7 by 2100. The water GDP elasticity (2.02) is well above the literature (< 1; ~0.4 for
     # water purification), which otherwise makes its value grow ~168-fold between 2022 and 2100.
     update_param!(m, :ForestEmulator, :price_cap_mult, forest_price_cap_mult)
+    # Non-market damages through the CES utility (rec, hab, nwfp, wat). Default: off.
+    # Typical use: forest_utility_weight = [1, 1, 0, 1] with forest_damage_weight = [0, 0, 1, 0],
+    # so that no service is counted in both channels. θ = 1 − income elasticity of the price
+    # (Drupp et al. 2025: 0.59 → θ ≈ 0.41; CWON water 2.02 → θ ≈ −1.02).
+    any((forest_damage_weight .> 0) .& (forest_utility_weight .> 0)) &&
+        @warn "A forest service is counted in both the consumption and the utility channel"
+    update_param!(m, :ForestEmulator, :utility_weight, forest_utility_weight)
+    update_param!(m, :ForestEmulator, :ces_theta, forest_ces_theta)
+    update_param!(m, :ForestEmulator, :ces_income_price, forest_ces_income_price)
     # The emulator runs 2022–2100; backup = 0 damage outside that span
     zero_backup = zeros(length(dim_keys(m, :time)), length(countries))
     connect_param!(m, :DamageAggregator => :damage_forest, :ForestEmulator => :country_damage, zero_backup)

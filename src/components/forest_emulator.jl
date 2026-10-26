@@ -55,6 +55,22 @@
     # So the price grows at most M times faster than income; Inf = off (must be > 1).
     # Value stays proportional to forest area, so forest losses keep their full cost.
     price_cap_mult = Parameter(index=[services])
+    # Non-market forest damages through a CES utility (Bastien-Olvera & Moore 2021):
+    #   U = [(1−α)C^θ + αE^θ]^(1/θ)
+    # E = value of the services with utility_weight[s] = 1 (non-market), C = consumption (GDP).
+    # The damage is the exact consumption equivalent D that solves U(C − D, E_n) = U(C, E_c):
+    #   D = C − [C^θ − (α/(1−α))(E_n^θ − E_c^θ)]^(1/θ)    (θ = 0: D = C[1 − (E_c/E_n)^(α/(1−α))])
+    # E_n = forest fixed at 2022, E_c = forest with climate change.
+    # α is calibrated by country so that 1 USD of E is worth 1 USD of C in 2022:
+    #   α/(1−α) = (E_2022/C_2022)^(1−θ)
+    # θ = 1 gives D = E_n − E_c (perfect substitutes).
+    # The income elasticity of the CES price is exactly 1 − θ, so by default E is valued at
+    # constant 2022 prices (ces_income_price = false) and θ carries the price growth; using both
+    # the elasticity and θ would count it twice. ces_income_price = true uses the emulator
+    # values (elasticity + ceiling), only to check that θ = 1 reproduces the additive case.
+    utility_weight   = Parameter(index=[services])
+    ces_theta        = Parameter(default = 1.0)
+    ces_income_price = Parameter{Bool}(default = false)
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
@@ -72,7 +88,13 @@
     ir_forest_Mha = Variable(index=[time, forest_regions])
     ir_value      = Variable(index=[time, forest_regions, services])
     # Climate-driven loss of market value: (value with forest fixed at 2022) − (value with climate)
-    country_damage = Variable(index=[time, country], unit="US\$2005/yr")
+    country_damage = Variable(index=[time, country], unit="US\$2005/yr")   # market + utility
+    country_damage_market  = Variable(index=[time, country], unit="US\$2005/yr")
+    country_damage_utility = Variable(index=[time, country], unit="US\$2005/yr")
+    country_E_nocl = Variable(index=[time, country], unit="US\$2005/yr")    # E_n
+    country_E      = Variable(index=[time, country], unit="US\$2005/yr")    # E_c
+    E0        = Variable(index=[country])                                   # E in 2022, USD2005/yr
+    ces_ratio = Variable(index=[country])                                   # α/(1−α)
     ir_pop        = Variable(index=[time, forest_regions])
     ir_gdppc      = Variable(index=[time, forest_regions])
 
@@ -156,9 +178,57 @@
         v.global_co2_flow[t]   = gQ
 
         # Market damage by country: 1e6 USD2020/yr → USD2005/yr
+        v.country_damage_market[t, :]  .= 0.0
+        v.country_damage_utility[t, :] .= 0.0
+        v.country_E_nocl[t, :] .= 0.0
+        v.country_E[t, :]      .= 0.0
         for c in d.country, s in 1:4
             loss = v.country_value_nocl[t, c, s] - v.country_value[t, c, s]
-            v.country_damage[t, c] += p.damage_weight[s] * loss * 1e6 * p.usd2020_to_2005
+            v.country_damage_market[t, c] += p.damage_weight[s] * loss * 1e6 * p.usd2020_to_2005
+        end
+
+        # Non-market services E (USD2005/yr), at constant 2022 prices or with the emulator prices
+        to05 = 1e6 * p.usd2020_to_2005
+        if p.ces_income_price
+            for c in d.country, s in 1:4
+                v.country_E_nocl[t, c] += p.utility_weight[s] * v.country_value_nocl[t, c, s] * to05
+                v.country_E[t, c]      += p.utility_weight[s] * v.country_value[t, c, s] * to05
+            end
+        else
+            for r in d.forest_regions
+                c = p.region_country[r]
+                c > 0 || continue
+                w = sum(p.utility_weight[s] * p.mv[r, s] for s in 1:4)
+                v.country_E_nocl[t, c] += w * p.F0[r] * to05
+                v.country_E[t, c]      += w * v.ir_forest_Mha[t, r] * to05
+            end
+        end
+
+        θ = p.ces_theta
+        for c in d.country
+            Cc = p.pc_gdp[t, c] * p.population[t, c] * 1e6          # USD2005/yr (GDP = consumption in GIVE)
+            if is_first(t)
+                v.E0[c] = v.country_E_nocl[t, c]
+                v.ces_ratio[c] = (v.E0[c] > 0 && Cc > 0) ? (v.E0[c] / Cc)^(1 - θ) : 0.0
+            end
+            En, Ec, k = v.country_E_nocl[t, c], v.country_E[t, c], v.ces_ratio[c]
+            D = 0.0
+            if En > 0 && k > 0 && isfinite(Cc) && Cc > 0
+                if abs(θ) < 1e-8                                     # Cobb-Douglas limit
+                    D = Cc * (1 - (Ec / En)^k)
+                else
+                    inner = Cc^θ - k * (En^θ - Ec^θ)
+                    if θ > 0
+                        D = inner > 0 ? Cc - inner^(1 / θ) : Cc         # loss cannot exceed C
+                    else
+                        # inner = Inf (E_c = 0) → D = C. inner ≤ 0 would need an
+                        # unbounded gain in E; not reached in practice, left at 0.
+                        D = inner > 0 ? Cc - inner^(1 / θ) : 0.0
+                    end
+                end
+            end
+            v.country_damage_utility[t, c] = D
+            v.country_damage[t, c] = v.country_damage_market[t, c] + D
         end
     end
 end
