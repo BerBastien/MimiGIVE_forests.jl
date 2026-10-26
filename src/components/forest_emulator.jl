@@ -46,7 +46,7 @@
     # Forest damages to consumption (market part of the services)
     # damage_weight[s] = share of service s counted as a market loss (0 = none, 1 = all)
     damage_weight  = Parameter(index=[services])
-    usd2020_to_2005 = Parameter(default = 0.773)   # US GDP deflator 2005/2020 (to verify)
+    usd2020_to_2005 = Parameter(default = 0.770)   # set from GIVE's pricelevel_2005_to_2020 in get_model
     # Ceiling on the income effect of the per-hectare price, calibrated to 2022.
     # g = (GDPpc_t/GDPpc_2022)^e_gdp is the income factor; y = g / (GDPpc_t/GDPpc_2022)
     # is how much faster than income the price has grown (y = 1 in 2022).

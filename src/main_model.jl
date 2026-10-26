@@ -292,6 +292,8 @@ if forest_emulator !== nothing
     # Forest market damages to consumption (rec, hab, nwfp, wat).
     # Default: only non-wood forest products count as a market loss.
     update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
+    # USD2020 → USD2005 with GIVE's own price level (BEA GDP deflator, see MimiGIVE.jl)
+    update_param!(m, :ForestEmulator, :usd2020_to_2005, 1 / pricelevel_2005_to_2020)
     # Ceiling on how much faster than income the per-hectare price may grow (rec, hab, nwfp, wat); Inf = off.
     # Default: water capped at M = 3 (central case; M = 2 and 5 as sensitivity). Anchor: the relative
     # price change of forest ecosystem services, ~1.27 %/yr (Drupp et al. 2025, ERE), gives a factor
