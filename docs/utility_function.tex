@@ -5,6 +5,7 @@
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{listings}
+\usepackage{graphicx}
 \usepackage[margin=2.5cm]{geometry}
 \usepackage{hyperref}
 \usepackage{xcolor}
@@ -15,6 +16,8 @@
   urlcolor=blue!50!black,
   citecolor=blue!50!black
 }
+
+\graphicspath{{figures/}{docs/figures/}}
 
 \lstset{
   basicstyle=\ttfamily\small,
@@ -309,36 +312,108 @@ claro si no se cumple.
         \texttt{forest = true}.
 \end{itemize}
 
-\section{Resultados de referencia}
+\section{Resultados de referencia y tendencias}
 
-La Tabla~\ref{tab:scc} reproduce la salida de
-\texttt{test/test\_compute\_utility\_function.jl} para 2020, con
-\texttt{include\_slr = false}, JULES y los parámetros centrales
-\(s=0.10\), \(\theta=0.55\), \(s_2=0\) para la variante anidada. Los valores
-están en USD2005 por tCO\(_2\).
+La Tabla~\ref{tab:scc} usa la configuración por defecto de \texttt{compute\_scc}
+(incluye SLR), JULES, 2020 y los parámetros centrales \(s=0.10\),
+\(\theta=0.55\), \(s_2=0.10\), \(\theta_2=0.58\). Los valores están en USD2005
+por tCO\(_2\).
+
+\begin{table}[h]
+\centering
+\begin{tabular}{lrrrr}
+\toprule
+Escenario & Original & \texttt{:moore} & \texttt{:derivatives} & \(\Delta\) \texttt{:moore} \\
+\midrule
+SSP119 & 10.93 & 11.24 & 11.24 & +2.80\% \\
+SSP245 & 22.54 & 22.64 & 22.65 & +0.44\% \\
+SSP585 & 14.50 & 14.66 & 14.67 & +1.13\% \\
+\bottomrule
+\end{tabular}
+\caption{SCC 2020 con y sin servicios ecosistémicos. La variante
+\texttt{:derivatives} usa \(s_2=0.10\), por lo que queda muy cerca de
+\texttt{:moore}.}
+\label{tab:scc}
+\end{table}
+
+La prueba \texttt{test/test\_compute\_utility\_function.jl} usa
+\texttt{include\_slr = false}; por eso allí los niveles son algo menores
+(SSP245: 22.26 original y 22.36 con \(s=0.10\)). El cambio porcentual es
+prácticamente el mismo. La Figura~\ref{fig:paths} muestra las tendencias de la
+fórmula CES y de sus insumos.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{utility_paths.png}
+\caption{Tendencias de la fórmula CES para SSP245, JULES, \(s=0.10\) y
+\(\theta=0.55\). (a) Valor global de los servicios no comercializables por
+servicio; (b) cociente \(E_t/C_t\); (c) niveles per cápita de \(C_t\) y
+\(E_t\) en escala logarítmica; (d) participación de \(E_t\) en la utilidad
+\(U_t\). La banda gris marca el periodo 2022--2100 del emulador.}
+\label{fig:paths}
+\end{figure}
+
+El valor global de los servicios no comercializables es aproximadamente
+0.34\% del consumo per cápita en 2022 y alcanza un máximo cercano a 4.6\% en
+2100. El servicio de agua domina el valor de 2100 porque su elasticidad ingreso
+calibrada es alta (\(2.02\)); los resultados son sensibles a ese supuesto y a
+la forma funcional de la valorización. Después de 2100, el nivel per cápita de
+\(E\) se mantiene constante y \(\mathrm{MD}_E=0\), de modo que el cociente
+\(E/C\) baja a medida que crece el consumo.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=\textwidth]{scc_scenarios.png}
+\caption{(a) SCC 2020 por escenario y método; (b) cambio porcentual respecto al
+SCC original. JULES, parámetros centrales.}
+\label{fig:scenarios}
+\end{figure}
+
+El aumento del SCC no es uniforme: es +2.80\% en SSP119, +0.44\% en SSP245 y
++1.13\% en SSP585. La magnitud depende sobre todo de \(\theta\). La
+Figura~\ref{fig:sensitivity} y la Tabla~\ref{tab:sensitivity} muestran que, con
+mayor sustituibilidad (\(\theta<0\)), el cambio puede ser mucho mayor: hasta
++30.6\% con \(s=0.15\) y \(\theta=-0.16\).
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.8\textwidth]{scc_sensitivity.png}
+\caption{Cambio porcentual del SCC \texttt{:moore} respecto al original en
+SSP245, para distintos valores de \(s\) y \(\theta\).}
+\label{fig:sensitivity}
+\end{figure}
 
 \begin{table}[h]
 \centering
 \begin{tabular}{lrrr}
 \toprule
-Escenario & Original & \texttt{:moore} & \texttt{:derivatives} \\
+\(s\) & \(\theta=-0.16\) & \(\theta=0.55\) & \(\theta=0.86\) \\
 \midrule
-SSP119 & 10.63 & 10.94 & 10.94 \\
-SSP245 & 22.26 & 22.36 & 22.36 \\
-SSP585 & 14.34 & 14.51 & 14.51 \\
+0.05 & +9.19\% & +0.21\% & +0.04\% \\
+0.10 & +19.31\% & +0.44\% & +0.09\% \\
+0.15 & +30.55\% & +0.70\% & +0.15\% \\
 \bottomrule
 \end{tabular}
-\caption{SCC 2020 con y sin servicios ecosistémicos. La variante
-\texttt{:derivatives} usa \(s_2=0\), por lo que coincide con
-\texttt{:moore}.}
-\label{tab:scc}
+\caption{Cambio porcentual del SCC \texttt{:moore} respecto al original,
+SSP245, 2020.}
+\label{tab:sensitivity}
 \end{table}
 
-Con el modelo SSP245 de la tabla anterior, el valor global de los servicios
-no comercializables es aproximadamente 0.34\% del consumo per cápita en 2022 y
-alrededor de 4.6\% en 2100. El servicio de agua domina el valor de 2100 porque
-su elasticidad ingreso calibrada es alta (\(2.02\)); los resultados son
-sensibles a ese supuesto y a la forma funcional de la valorización.
+\subsection{Reproducción}
+
+El script \texttt{scripts/utility\_scc.jl} reproduce la tabla, la sensibilidad
+y las tres figuras:
+\begin{lstlisting}
+julia --project=. scripts/utility_scc.jl
+# solo regenerar figuras con los CSV ya calculados:
+UTILITY_SCC_REUSE=true julia --project=. scripts/utility_scc.jl
+\end{lstlisting}
+Los resultados numéricos se guardan en
+\texttt{docs/utility\_scc\_results.csv} y
+\texttt{docs/utility\_scc\_sensitivity.csv}; las figuras en
+\texttt{docs/figures/}. La prueba formal de regresión está en
+\texttt{test/test\_compute\_utility\_function.jl} y se ejecuta con la suite de
+pruebas del paquete (\texttt{Pkg.test()}).
 
 \section{Supuestos y limitaciones}
 
