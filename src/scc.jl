@@ -1,4 +1,4 @@
-using Dates, CSVFiles, DataFrames, FileIO, Mimi, Query
+using Dates, CSVFiles, DataFrames, FileIO, Mimi, Query, Random
 
 include("utils/scc_constants.jl")
 include("utils/scc_streaming.jl")
@@ -60,6 +60,8 @@ that will be run, otherwise it is set to `nothing` and ignored.
 - `CIAM_foresight`(default is :perfect) - Use limited foresight (:limited) or perfect foresight (:perfect) for MimiCIAM cost calculations
 - `CIAM_GDPcap` (default is false) - Limit SLR damages to country-level annual GDP
 - `pulse_size` (default 1.) - This determines the size of the additional pulse of emissions. Default of `1.` implies the standard pulse size of 1Gt of C for CO2, 1Mt of CH4, and 1Mt of N2O. 
+- `method` (default :original) - SCC aggregation method. `:original` uses consumption per capita. `:moore` uses a CES utility of consumption and non-market ecosystem services, `U = [(1-s)C^θ + sE^θ]^(1/θ)`. `:derivatives` uses the nested CES `F = [(... )^θ2 + s2*i_pc^θ2]^(1/θ2)`. The last two require a model built with `forest_emulator` and only run for `n = 0`.
+- `params` - NamedTuple with the utility parameters (`forest`, `s`, `θ`, `s2`, `θ2`, `i_pc`). Defaults to `FOREST_DEFAULT_PARAMS` for `:moore` and `:derivatives`.
 
 """
 function compute_scc(m::Model = get_model(); 
@@ -99,6 +101,7 @@ function compute_scc(m::Model = get_model();
     year === nothing ? error("Must specify an emission year. Try `compute_scc(m, year=2020)`.") : nothing
     !(last_year in _model_years) ? error("Invalid value of $last_year for last_year. last_year must be within the model's time index $_model_years.") : nothing
     !(year in _model_years) ? error("Cannot compute the scc for year $year, year must be within the model's time index $_model_years.") : nothing
+    last_year < year ? error("last_year ($last_year) must be greater than or equal to year ($year).") : nothing
     !(gas in gases_list) ? error("Invalid value of $gas for gas, gas must be one of $(gases_list).") : nothing
     
     # post-process the provided discount rates for backwards compatibility
@@ -237,10 +240,12 @@ function _compute_scc(mm::MarginalModel;
         ciam_marginal_damages = mm.base[:DamageAggregator, :include_slr] ? all_ciam_marginal_damages.globe : fill(0., length(_model_years)) 
     end
 
-        marginal_damages = main_marginal_damages .+ ciam_marginal_damages
+    marginal_damages = main_marginal_damages .+ ciam_marginal_damages
 
-    # Métodos alternativos de SCC
+    # Alternative SCC methods with ecosystem services in the utility function
     if method != :original
+        domestic &&
+            error("Los métodos :moore y :derivatives solo calculan el SCC global; usa compute_domestic_values = false.")
         discount_rates === nothing ||
             error("Los métodos :moore y :derivatives no usan discount_rates.")
 
@@ -1390,8 +1395,25 @@ function add_marginal_emissions!(m::Model, year::Int, gas::Symbol, pulse_size::F
     end
 end
 # ---------------------------------------------------------------------------
-# Métodos alternativos de SCC
+# Alternative SCC methods: ecosystem services in a CES utility function
 # ---------------------------------------------------------------------------
+#
+# The standard GIVE SCC discounts marginal damages with consumption per capita:
+#
+#   SCC = Σ_t (C_y / C_t)^η (1 + ρ)^-(t-y) MD_t
+#
+# The methods below replace C_t by a CES composite of marketed consumption C_t
+# and non-market ecosystem services E_t:
+#
+#   U_t = [(1 - s) C_t^θ + s E_t^θ]^(1/θ),   0 ≤ s < 1,   θ ≠ 0.
+#
+# With W = Σ_t U_t^(1-η)/(1-η) (1 + ρ)^-(t-y), the SCC is
+#
+#   SCC = Σ_t (U_y/U_t)^η (1+ρ)^-(t-y) (μ_C,t MD_C,t + μ_E,t MD_E,t) / μ_C,y
+#
+# where μ_C,t = ∂U_t/∂C_t and μ_E,t = ∂U_t/∂E_t, and MD_C and MD_E are the
+# marginal damages (positive) to consumption and ecosystem services per tonne
+# of the gas. E and MD_E come from ForestEmulator and only cover 2022-2100.
 
 const FOREST_DEFAULT_PARAMS = (
     forest = true,
@@ -1426,56 +1448,78 @@ function sample_forest_params(rng=Random.default_rng())
 end
 
 
-const _FOREST_NONMARKET = [1, 2, 4]  # recreación, hábitat y agua
-const _FOREST_MARKET = [3]           # productos forestales no maderables
+const _FOREST_NONMARKET = [1, 2, 4]  # rec, hab, wat (non-market services)
+const _FOREST_MARKET = [3]           # nwfp (market service, already in GDP)
 
+"""
+    _forest_components(mm, gas, params) -> (E, MD_E)
+
+Return two vectors over the full model time axis (1750:2300):
+
+- `E[t]`: global non-market forest services per capita in USD2005/person/yr,
+  converted from the USD2020 values produced by `ForestEmulator`.
+- `MD_E[t]`: marginal damage to those services from the emission pulse, in
+  USD2005 per tonne of `gas` (CO2-equivalent mass for CO2 and N2O).
+
+`E` is carried at its 2022 value before the emulator starts and at its 2100
+value after it ends. `MD_E` is zero outside 2022-2100 because the emulator has
+no climate response there.
+"""
 function _forest_components(mm::MarginalModel, gas::Symbol, params)
-    years = _model_years
-    n = length(years)
-
+    n = length(_model_years)
     E = zeros(n)
     MD_E = zeros(n)
 
-    if !get(params, :forest, true)
-        return E, MD_E
-    end
+    get(params, :forest, true) || return E, MD_E
+
+    haskey(mm.base.md.namespace, :ForestEmulator) || error(
+        "method = :moore/:derivatives with forest = true requires a model built " *
+        "with `forest_emulator = :jules`, `:lpjml` or `:mc2`.")
 
     conv = scc_gas_molecular_conversions[gas]
+    defl = 1 / pricelevel_2005_to_2020          # USD2020 -> USD2005
 
-    # Años cubiertos por el componente forestal
-    forest_years = Mimi.dim_keys(mm.base, :time)
     forest_first = Mimi.compdef(mm.base, :ForestEmulator).first
-    forest_last = Mimi.compdef(mm.base, :ForestEmulator).last
+    forest_last  = Mimi.compdef(mm.base, :ForestEmulator).last
+    first_idx = findfirst(isequal(forest_first), _model_years)
+    last_idx  = findfirst(isequal(forest_last), _model_years)
+    (first_idx === nothing || last_idx === nothing) && error(
+        "ForestEmulator years ($forest_first-$forest_last) are outside the model time axis.")
 
-    cv_base = mm.base[:ForestEmulator, :country_value]
-    cv_mod  = mm.modified[:ForestEmulator, :country_value]
+    cv_base = mm.base[:ForestEmulator, :country_value]   # 1e6 USD2020/yr
+    cv_marg = mm[:ForestEmulator, :country_value]        # 1e6 USD2020/yr per tonne
+    pop = mm.base[:global_netconsumption, :global_population]  # million people
 
-    pop = mm.base[:global_netconsumption, :global_population]
+    for i in eachindex(_model_years)
+        # Carry the nearest emulator year so E is positive over the whole horizon.
+        # Per-capita services are held at the nearest endpoint value.
+        ti = clamp(i, first_idx, last_idx)
+        pop_ref = pop[ti]
+        if !ismissing(pop_ref) && pop_ref > 0
+            total = sum(skipmissing(cv_base[ti, :, _FOREST_NONMARKET]))
+            E[i] = total * 1e6 * defl / (pop_ref * 1e6)
+        end
 
-    for (i, year) in enumerate(years)
-        if forest_first <= year <= forest_last
-            ti = findfirst(==(year), forest_years)
-            ti === nothing && continue
-
-            # Servicios no de mercado per cápita
-            vals = cv_base[ti, :, _FOREST_NONMARKET]
-            E[i] = sum(skipmissing(vals)) / pop[i] *
-                   get(params, :usd_scale, 1.0)
-
-            # Daño marginal = valor base - valor con pulso
-            base_vals = cv_base[ti, :, _FOREST_NONMARKET]
-            mod_vals  = cv_mod[ti, :, _FOREST_NONMARKET]
-
-            delta = sum(skipmissing(base_vals)) -
-                    sum(skipmissing(mod_vals))
-
-            MD_E[i] = delta * 1e6 * conv
+        if first_idx <= i <= last_idx
+            # Damage = value without the pulse - value with the pulse.
+            damage = -sum(skipmissing(cv_marg[i, :, _FOREST_NONMARKET]))
+            MD_E[i] = damage * 1e6 * defl * conv
         end
     end
 
     return E, MD_E
 end
 
+# Validate the CES parameters shared by both methods.
+function _check_utility_params(params)
+    s = get(params, :forest, true) ? get(params, :s, 0.0) : 0.0
+    (0 <= s < 1) || error("The CES share `s` must satisfy 0 <= s < 1 (got $s).")
+    if s > 0
+        θ = get(params, :θ, 0.0)
+        θ != 0 || error("The CES curvature `θ` must be non-zero (θ → 0 is the Cobb-Douglas limit, not implemented).")
+    end
+    return s
+end
 
 function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
                     year::Int, last_year::Int, eta, prtp, params)
@@ -1483,26 +1527,46 @@ function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
     li = findfirst(isequal(last_year), _model_years)
 
     C = mm.base[:global_netconsumption, :net_cpc]
-    E, MD_E = _forest_components(mm, gas, params)
-    MD_C = D_total .- MD_E
+    s = _check_utility_params(params)
 
-    # Enable or disable forest services in the utility function
-    s = get(params, :forest, true) ? params.s : 0.0
-    θ = params.θ
-
-    U  = ((1 - s) .* C .^ θ .+ s .* E .^ θ) .^ (1 / θ)
-    μC = (1 - s) .* C .^ (θ - 1) .* U .^ (1 - θ)
-    μE = s == 0 ? zeros(length(C)) : [
-    e > 0 ? s * e^(θ - 1) * u^(1 - θ) : 0.0
-    for (e, u) in zip(E, U)
-    ]
-
-    num = sum(
-        (U[yi] / U[t])^eta *
-        (1 + prtp)^(-(_model_years[t] - year)) *
-        (μC[t] * MD_C[t] + μE[t] * MD_E[t])
+    # s = 0 is exactly the original GIVE formula (no forest channel).
+    if s == 0
+        num = 0.0
         for t in yi:li
-    )
+            c_y = C[yi]; c_t = C[t]
+            (ismissing(c_y) || ismissing(c_t)) && error("Missing consumption per capita in $(_model_years[t]).")
+            md = D_total[t]
+            ismissing(md) && error("Missing marginal damages in $(_model_years[t]).")
+            num += (c_y / c_t)^eta * (1 + prtp)^(-(_model_years[t] - year)) * md
+        end
+        return num
+    end
+
+    θ = get(params, :θ, 0.0)
+    E, MD_E = _forest_components(mm, gas, params)
+
+    U  = zeros(length(_model_years))
+    μC = zeros(length(_model_years))
+    μE = zeros(length(_model_years))
+
+    for t in yi:li
+        c = C[t]; e = E[t]
+        (ismissing(c) || c <= 0) && error("Consumption per capita must be positive for the CES utility (year $(_model_years[t])).")
+        e > 0 || error("Ecosystem services per capita must be positive for the CES utility (year $(_model_years[t])).")
+        u = ((1 - s) * c^θ + s * e^θ)^(1 / θ)
+        U[t]  = u
+        μC[t] = (1 - s) * c^(θ - 1) * u^(1 - θ)
+        μE[t] = s * e^(θ - 1) * u^(1 - θ)
+    end
+
+    num = 0.0
+    for t in yi:li
+        md_c = D_total[t]
+        ismissing(md_c) && error("Missing marginal damages in $(_model_years[t]).")
+        num += (U[yi] / U[t])^eta *
+               (1 + prtp)^(-(_model_years[t] - year)) *
+               (μC[t] * md_c + μE[t] * MD_E[t])
+    end
 
     return num / μC[yi]
 end
@@ -1521,46 +1585,59 @@ function _scc_derivatives(
     li = findfirst(isequal(last_year), _model_years)
 
     C = mm.base[:global_netconsumption, :net_cpc]
-    E, MD_E = _forest_components(mm, gas, params)
-    MD_C = D_total .- MD_E
+    s = _check_utility_params(params)
+    s2 = get(params, :forest, true) ? get(params, :s2, 0.0) : 0.0
+    s2 >= 0 || error("The CES share `s2` must be non-negative (got $s2).")
 
-    # Parámetros de la función de utilidad
-    s = get(params, :forest, true) ? params.s : 0.0
-    θ = params.θ
-    s2 = params.s2
-    θ2 = params.θ2
-
-    # Parámetros heredados de DICE
-    α = eta
-    ρ = prtp
-
-    # Supuesto provisional para i_t
-    i_pc = get(params, :i_pc, 1.0)
-
-    # Funciones CES
-    ci(c, e) = ((1 - s) * c^θ + s * e^θ)^(1 / θ)
-    f(c, e) = (ci(c, e)^θ2 + s2 * i_pc^θ2)^(1 / θ2)
-
-    # Derivadas marginales
-    dfc(c, e) = (1 - s) *
-        (ci(c, e) / c)^(1 - θ) *
-        (f(c, e) / ci(c, e))^(1 - θ2)
-
-    dfe(c, e) = s == 0 ? 0.0 :
-        s * (ci(c, e) / e)^(1 - θ) *
-        (f(c, e) / ci(c, e))^(1 - θ2)
-
-    F = [f(C[t], E[t]) for t in eachindex(C)]
-
-    num = sum(
-        (F[yi] / F[t])^α *
-        exp(-ρ * (_model_years[t] - year)) *
-        (
-            dfc(C[t], E[t]) * MD_C[t] +
-            dfe(C[t], E[t]) * MD_E[t]
-        )
+    # With s = s2 = 0 the nested CES collapses to consumption and the formula
+    # is exactly the original GIVE SCC.
+    if s == 0 && s2 == 0
+        num = 0.0
         for t in yi:li
-    )
+            c_y = C[yi]; c_t = C[t]
+            (ismissing(c_y) || ismissing(c_t)) && error("Missing consumption per capita in $(_model_years[t]).")
+            md = D_total[t]
+            ismissing(md) && error("Missing marginal damages in $(_model_years[t]).")
+            num += (c_y / c_t)^eta * (1 + prtp)^(-(_model_years[t] - year)) * md
+        end
+        return num
+    end
 
-    return num / dfc(C[yi], E[yi])
+    θ  = get(params, :θ, 0.0)
+    θ2 = get(params, :θ2, 0.0)
+    i_pc = get(params, :i_pc, 1.0)
+    (s == 0 || θ != 0) || error("The CES curvature `θ` must be non-zero.")
+    (s2 == 0 || θ2 != 0) || error("The CES curvature `θ2` must be non-zero.")
+    (s2 == 0 || i_pc > 0) || error("`i_pc` must be positive when s2 > 0.")
+
+    E, MD_E = _forest_components(mm, gas, params)
+
+    F   = zeros(length(_model_years))
+    dC  = zeros(length(_model_years))
+    dE  = zeros(length(_model_years))
+
+    ci(c, e) = s == 0 ? c : ((1 - s) * c^θ + s * e^θ)^(1 / θ)
+    f(c, e)  = s2 == 0 ? ci(c, e) : (ci(c, e)^θ2 + s2 * i_pc^θ2)^(1 / θ2)
+    dfc(c, e) = (1 - s) * (ci(c, e) / c)^(1 - θ) * (f(c, e) / ci(c, e))^(1 - θ2)
+    dfe(c, e) = s == 0 ? 0.0 : s * (ci(c, e) / e)^(1 - θ) * (f(c, e) / ci(c, e))^(1 - θ2)
+
+    for t in yi:li
+        c = C[t]; e = E[t]
+        (ismissing(c) || c <= 0) && error("Consumption per capita must be positive for the CES utility (year $(_model_years[t])).")
+        (s == 0 || e > 0) || error("Ecosystem services per capita must be positive for the CES utility (year $(_model_years[t])).")
+        F[t]  = f(c, e)
+        dC[t] = dfc(c, e)
+        dE[t] = dfe(c, e)
+    end
+
+    num = 0.0
+    for t in yi:li
+        md_c = D_total[t]
+        ismissing(md_c) && error("Missing marginal damages in $(_model_years[t]).")
+        num += (F[yi] / F[t])^eta *
+               (1 + prtp)^(-(_model_years[t] - year)) *
+               (dC[t] * md_c + dE[t] * MD_E[t])
+    end
+
+    return num / dC[yi]
 end

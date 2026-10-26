@@ -257,14 +257,13 @@ if forest_emulator !== nothing
     reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
     country_idx = Dict(c => i for (i, c) in enumerate(countries))
 
-    # Temperatura de referencia de la calibración de b1, b2, c1 y c2 (°C).
-    # Confirmar el valor con la fuente de la regresión antes de correr.
-
-
     set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
     set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
 
-    add_comp!(m, ForestEmulator, :ForestEmulator, after = :TempNorm_1995to2005)
+    # The regressions are calibrated on 2022-2100; the component uses 2022 as
+    # its reference year for temperature, population and GDP per capita.
+    add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2100,
+              after = :TempNorm_1995to2005)
 
     connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
     connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
@@ -279,7 +278,7 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
     update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
 
-    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # valor faltante = sin incertidumbre (confirmar)
+    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # missing standard error = no uncertainty
     update_param!(m, :ForestEmulator, :b1_se, se(:forest_b1_se_Mha_per_C))
     update_param!(m, :ForestEmulator, :b2_se, se(:forest_b2_se_Mha_per_C2))
     update_param!(m, :ForestEmulator, :c1_se, se(:cveg_b1_se_tC_per_C))

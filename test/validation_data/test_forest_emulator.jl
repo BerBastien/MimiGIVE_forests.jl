@@ -74,7 +74,11 @@
     F = Float64.(iF[ti, :])
     @test all(F .>= 0)
     @test all(F .<= reshape(A, 1, :) .+ 1e-12)
-    @test isapprox(Float64.(iF[t22, :]), min.(A, max.(0.0, F0)); rtol = 1e-9, atol = 1e-12)
+    # IRs without a country mapping (region_country = 0) only enter the global
+    # totals; their ir_forest_Mha is left at zero by the component.
+    has_country = rc .> 0
+    @test isapprox(Float64.(iF[t22, has_country]),
+                   min.(A, max.(0.0, F0))[has_country]; rtol = 1e-9, atol = 1e-12)
 
     # En 2022 no hay cambio de carbono (flujo = 0) y el valor sin clima = valor con clima
     @test all(isapprox.(Float64.(cflow[t22, :]), 0.0; atol = 1e-12))
