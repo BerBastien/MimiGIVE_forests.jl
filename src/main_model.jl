@@ -257,9 +257,14 @@ if forest_emulator !== nothing
     reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
     country_idx = Dict(c => i for (i, c) in enumerate(countries))
 
+    # Temperatura de referencia de la calibración de b1, b2, c1 y c2 (°C).
+    # Confirmar el valor con la fuente de la regresión antes de correr.
+
+
     set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
     set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
-    add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2100, after = :TempNorm_1995to2005)
+
+    add_comp!(m, ForestEmulator, :ForestEmulator, after = :TempNorm_1995to2005)
 
     connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
     connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
@@ -273,23 +278,25 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
     update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
     update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
-    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # missing → no uncertainty
+
+    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # valor faltante = sin incertidumbre (confirmar)
     update_param!(m, :ForestEmulator, :b1_se, se(:forest_b1_se_Mha_per_C))
     update_param!(m, :ForestEmulator, :b2_se, se(:forest_b2_se_Mha_per_C2))
     update_param!(m, :ForestEmulator, :c1_se, se(:cveg_b1_se_tC_per_C))
     update_param!(m, :ForestEmulator, :c2_se, se(:cveg_b2_se_tC_per_C2))
+
     update_param!(m, :ForestEmulator, :pop_share, Float64.(coalesce.(reg.pop_share, 0.0)))
     update_param!(m, :ForestEmulator, :gdp_share, Float64.(coalesce.(reg.gdp_share, 0.0)))
 
     mv_cols = [:rec_usd_ha_yr_2020, :hab_usd_ha_yr_2020, :nwfp_usd_ha_yr_2020, :wat_usd_ha_yr_2020]
     mv_mat = hcat([Float64.(coalesce.(reg[!, c], 0.0)) for c in mv_cols]...)
     mv_mat[.!isfinite.(mv_mat)] .= 0.0
-
     update_param!(m, :ForestEmulator, :mv, mv_mat)
+
+    # Elasticidades: CWON 2024 Non-Wood Forest Technical Report, Tabla 5.1
+    # Agua no tiene término poblacional, por eso su SE de población es 0.
     update_param!(m, :ForestEmulator, :e_gdp, [0.67, 0.79, -1.11, 2.02])
     update_param!(m, :ForestEmulator, :e_pop, [0.72, 0.85, 0.57, 0.0])
-    # Robust standard errors, CWON 2024 Non-Wood Forest Technical Report, Table 5.1
-    # (water has no population term, so its SE is 0)
     update_param!(m, :ForestEmulator, :e_gdp_se, [0.25, 0.33, 0.17, 0.63])
     update_param!(m, :ForestEmulator, :e_pop_se, [0.10, 0.20, 0.08, 0.0])
 end

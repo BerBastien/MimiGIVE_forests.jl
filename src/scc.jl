@@ -28,7 +28,9 @@ include("utils/scc_streaming.jl")
             CIAM_foresight::Symbol = :perfect,
             CIAM_GDPcap::Bool = false,
             post_mcs_creation_function = nothing,
-            pulse_size::Float64 = 1.
+            pulse_size::Float64 = 1.,
+            method::Symbol = :original,
+            params::Union{NamedTuple, Nothing} = nothing
         )
 
 Compute the SC of a gas for the GIVE in USD \$2005
@@ -84,7 +86,9 @@ function compute_scc(m::Model = get_model();
             CIAM_foresight::Symbol = :perfect,
             CIAM_GDPcap::Bool = false,
             post_mcs_creation_function = nothing,
-            pulse_size::Float64 = 1.
+            pulse_size::Float64 = 1.,
+            method::Symbol = :original,
+            params::Union{NamedTuple, Nothing} = nothing
         )
 
     hfc_list = [:HFC23, :HFC32, :HFC43_10, :HFC125, :HFC134a, :HFC143a, :HFC227ea, :HFC245fa]
@@ -98,6 +102,12 @@ function compute_scc(m::Model = get_model();
     !(gas in gases_list) ? error("Invalid value of $gas for gas, gas must be one of $(gases_list).") : nothing
     
     # post-process the provided discount rates for backwards compatibility
+        # Parámetros predeterminados para los métodos alternativos
+    if params === nothing
+        if method == :moore || method == :derivatives
+            params = FOREST_DEFAULT_PARAMS
+        end
+    end
     # with NamedTuples that did not include equity weighting fields ew and ew_norm_region
     if discount_rates !== nothing
 
@@ -132,9 +142,12 @@ function compute_scc(m::Model = get_model();
                             domestic = compute_domestic_values,
                             CIAM_foresight = CIAM_foresight,
                             CIAM_GDPcap = CIAM_GDPcap,
-                            pulse_size = pulse_size
+                            pulse_size = pulse_size,
+                            method = method,
+                            params = params
                         )
     else
+         method == :original || error("method = $method solo está implementado para n = 0.")
         isnothing(discount_rates) ? error("To run the Monte Carlo compute_scc function (n != 0), please use the `discount_rates` argument.") : nothing
         
         # Set up output directories
@@ -179,7 +192,9 @@ function _compute_scc(mm::MarginalModel;
                         domestic::Bool,
                         CIAM_foresight::Symbol,
                         CIAM_GDPcap::Bool,
-                        pulse_size::Float64
+                        pulse_size::Float64,
+                        method::Symbol = :original,
+                        params = nothing
                     )
 
     year_index = findfirst(isequal(year), _model_years)
@@ -205,7 +220,7 @@ function _compute_scc(mm::MarginalModel;
     
         # zero out the CIAM marginal damages from start year (2020) through emissions
         # year - they will be non-zero due to foresight but saved marginal damages
-        # should be zero in the pre-emissions year
+        # should be zero in the pre-emis|sions year
         all_ciam_marginal_damages.globe[1:year_index] .= 0.
         all_ciam_marginal_damages.domestic[1:year_index] .= 0.
         all_ciam_marginal_damages.country[1:year_index, :] .= 0.
@@ -222,8 +237,43 @@ function _compute_scc(mm::MarginalModel;
         ciam_marginal_damages = mm.base[:DamageAggregator, :include_slr] ? all_ciam_marginal_damages.globe : fill(0., length(_model_years)) 
     end
 
-    marginal_damages = main_marginal_damages .+ ciam_marginal_damages
-    
+        marginal_damages = main_marginal_damages .+ ciam_marginal_damages
+
+    # Métodos alternativos de SCC
+    if method != :original
+        discount_rates === nothing ||
+            error("Los métodos :moore y :derivatives no usan discount_rates.")
+
+        params === nothing &&
+            error("Pasa `params` para el método $method.")
+
+        if method == :moore
+            return _scc_moore(
+                mm, marginal_damages, gas;
+                year = year,
+                last_year = last_year,
+                eta = eta,
+                prtp = prtp,
+                params = params
+            )
+
+        elseif method == :derivatives
+            return _scc_derivatives(
+                mm,
+                marginal_damages,
+                gas;
+                year = year,
+                last_year = last_year,
+                params = params,
+                eta = eta,
+                prtp = prtp,
+            )
+
+        else
+            error("method debe ser :original, :moore o :derivatives.")
+        end
+    end
+
     # We don't care about units here because we are only going to use ratios
     cpc = mm.base[:global_netconsumption, :net_cpc]
 
@@ -1334,8 +1384,183 @@ function add_marginal_emissions!(m::Model, year::Int, gas::Symbol, pulse_size::F
         # update emissions parameter with a pulse
         new_emissions[pulse_year_index, gas_index] +=  pulse_size # add pulse in kt hfc
         update_param!(m, :emiss_other_ghg, new_emissions)
-        
+
     else
-        error("Gas `" + gas + "` is not supported.")
+        error("Gas `" * string(gas) * "` is not supported.")
     end
+end
+# ---------------------------------------------------------------------------
+# Métodos alternativos de SCC
+# ---------------------------------------------------------------------------
+
+const FOREST_DEFAULT_PARAMS = (
+    forest = true,
+    s = 0.10,
+    θ = 0.55,
+    s2 = 0.10,
+    θ2 = 0.58,
+    i_pc = 1.0,
+)
+
+const FOREST_MC_S1 = [0.05, 0.10, 0.15]
+
+const FOREST_MC_THETA1 = [
+    0.74, 0.86, 0.68, 0.69, 0.32,
+    0.58, -0.16, 0.41, -0.10, 0.73,
+    0.79, 0.76, 0.80,
+]
+
+const FOREST_MC_S2 = [0.05, 0.10, 0.15]
+
+const FOREST_MC_THETA2 = [0.63, 0.78, 0.62, 0.27]
+
+function sample_forest_params(rng=Random.default_rng())
+    return (
+        forest = true,
+        s = rand(rng, FOREST_MC_S1),
+        θ = rand(rng, FOREST_MC_THETA1),
+        s2 = rand(rng, FOREST_MC_S2),
+        θ2 = rand(rng, FOREST_MC_THETA2),
+        i_pc = 1.0,
+    )
+end
+
+
+const _FOREST_NONMARKET = [1, 2, 4]  # recreación, hábitat y agua
+const _FOREST_MARKET = [3]           # productos forestales no maderables
+
+function _forest_components(mm::MarginalModel, gas::Symbol, params)
+    years = _model_years
+    n = length(years)
+
+    E = zeros(n)
+    MD_E = zeros(n)
+
+    if !get(params, :forest, true)
+        return E, MD_E
+    end
+
+    conv = scc_gas_molecular_conversions[gas]
+
+    # Años cubiertos por el componente forestal
+    forest_years = Mimi.dim_keys(mm.base, :time)
+    forest_first = Mimi.compdef(mm.base, :ForestEmulator).first
+    forest_last = Mimi.compdef(mm.base, :ForestEmulator).last
+
+    cv_base = mm.base[:ForestEmulator, :country_value]
+    cv_mod  = mm.modified[:ForestEmulator, :country_value]
+
+    pop = mm.base[:global_netconsumption, :global_population]
+
+    for (i, year) in enumerate(years)
+        if forest_first <= year <= forest_last
+            ti = findfirst(==(year), forest_years)
+            ti === nothing && continue
+
+            # Servicios no de mercado per cápita
+            vals = cv_base[ti, :, _FOREST_NONMARKET]
+            E[i] = sum(skipmissing(vals)) / pop[i] *
+                   get(params, :usd_scale, 1.0)
+
+            # Daño marginal = valor base - valor con pulso
+            base_vals = cv_base[ti, :, _FOREST_NONMARKET]
+            mod_vals  = cv_mod[ti, :, _FOREST_NONMARKET]
+
+            delta = sum(skipmissing(base_vals)) -
+                    sum(skipmissing(mod_vals))
+
+            MD_E[i] = delta * 1e6 * conv
+        end
+    end
+
+    return E, MD_E
+end
+
+
+function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
+                    year::Int, last_year::Int, eta, prtp, params)
+    yi = findfirst(isequal(year), _model_years)
+    li = findfirst(isequal(last_year), _model_years)
+
+    C = mm.base[:global_netconsumption, :net_cpc]
+    E, MD_E = _forest_components(mm, gas, params)
+    MD_C = D_total .- MD_E
+
+    # Enable or disable forest services in the utility function
+    s = get(params, :forest, true) ? params.s : 0.0
+    θ = params.θ
+
+    U  = ((1 - s) .* C .^ θ .+ s .* E .^ θ) .^ (1 / θ)
+    μC = (1 - s) .* C .^ (θ - 1) .* U .^ (1 - θ)
+    μE = s == 0 ? zeros(length(C)) : [
+    e > 0 ? s * e^(θ - 1) * u^(1 - θ) : 0.0
+    for (e, u) in zip(E, U)
+    ]
+
+    num = sum(
+        (U[yi] / U[t])^eta *
+        (1 + prtp)^(-(_model_years[t] - year)) *
+        (μC[t] * MD_C[t] + μE[t] * MD_E[t])
+        for t in yi:li
+    )
+
+    return num / μC[yi]
+end
+
+function _scc_derivatives(
+    mm::MarginalModel,
+    D_total::Vector,
+    gas::Symbol;
+    year::Int,
+    last_year::Int,
+    params,
+    eta,
+    prtp,
+)
+    yi = findfirst(isequal(year), _model_years)
+    li = findfirst(isequal(last_year), _model_years)
+
+    C = mm.base[:global_netconsumption, :net_cpc]
+    E, MD_E = _forest_components(mm, gas, params)
+    MD_C = D_total .- MD_E
+
+    # Parámetros de la función de utilidad
+    s = get(params, :forest, true) ? params.s : 0.0
+    θ = params.θ
+    s2 = params.s2
+    θ2 = params.θ2
+
+    # Parámetros heredados de DICE
+    α = eta
+    ρ = prtp
+
+    # Supuesto provisional para i_t
+    i_pc = get(params, :i_pc, 1.0)
+
+    # Funciones CES
+    ci(c, e) = ((1 - s) * c^θ + s * e^θ)^(1 / θ)
+    f(c, e) = (ci(c, e)^θ2 + s2 * i_pc^θ2)^(1 / θ2)
+
+    # Derivadas marginales
+    dfc(c, e) = (1 - s) *
+        (ci(c, e) / c)^(1 - θ) *
+        (f(c, e) / ci(c, e))^(1 - θ2)
+
+    dfe(c, e) = s == 0 ? 0.0 :
+        s * (ci(c, e) / e)^(1 - θ) *
+        (f(c, e) / ci(c, e))^(1 - θ2)
+
+    F = [f(C[t], E[t]) for t in eachindex(C)]
+
+    num = sum(
+        (F[yi] / F[t])^α *
+        exp(-ρ * (_model_years[t] - year)) *
+        (
+            dfc(C[t], E[t]) * MD_C[t] +
+            dfe(C[t], E[t]) * MD_E[t]
+        )
+        for t in yi:li
+    )
+
+    return num / dfc(C[yi], E[yi])
 end

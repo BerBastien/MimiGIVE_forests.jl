@@ -1,3 +1,6 @@
+# Índice de 2022 en 1750:2300 (2022 - 1750 + 1). Verificar con:
+# findfirst(isequal(2022), MimiGIVE._model_years)  → debe dar 273
+const _FOREST_REF_INDEX = 273
 @defcomp ForestEmulator begin
     country        = Index()
     forest_regions = Index()
@@ -47,7 +50,6 @@
     gdp_share = Parameter(index=[forest_regions])
 
     # --- Variables ---
-    T_ref     = Variable()
     cveg_prev = Variable(index=[forest_regions])
     pop0      = Variable(index=[country])
     gdp0      = Variable(index=[country])
@@ -63,12 +65,11 @@
     ir_gdppc      = Variable(index=[time, forest_regions])
 
     function run_timestep(p, v, d, t)
-        if is_first(t)
-            v.T_ref = p.temperature[t]
-            for c in d.country
-                v.pop0[c] = p.population[t, c]
-                v.gdp0[c] = p.pc_gdp[t, c]
-            end
+               # Referencia fija en 2022: temperatura, población y PIB de la calibración
+        Tref = p.temperature[_FOREST_REF_INDEX]
+        for c in d.country
+            v.pop0[c] = p.population[_FOREST_REF_INDEX, c]
+            v.gdp0[c] = p.pc_gdp[_FOREST_REF_INDEX, c]
         end
 
         v.country_forest_Mha[t, :]    .= 0.0
@@ -87,7 +88,7 @@
         e_gdp = [p.e_gdp[s] + z_gdp[s] * p.e_gdp_se[s] for s in 1:4]
         e_pop = [p.e_pop[s] + z_pop[s] * p.e_pop_se[s] for s in 1:4]
 
-        fac = zeros(length(d.country), 4)
+                fac = zeros(length(d.country), 4)
         for c in d.country, s in 1:4
             pr = p.population[t, c] / v.pop0[c]
             gr = p.pc_gdp[t, c] / v.gdp0[c]
@@ -96,7 +97,7 @@
 
         gF = 0.0
         gQ = 0.0
-        x = p.temperature[t] - v.T_ref
+        x = p.temperature[t] - Tref
         for r in d.forest_regions
             # Coefficient for this run = estimate + shock × standard error
             b1 = p.b1[r] + p.z_b1 * p.b1_se[r]
