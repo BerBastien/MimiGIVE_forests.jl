@@ -1514,13 +1514,15 @@ end
 function _check_utility_params(params)
     s = get(params, :forest, true) ? get(params, :s, 0.0) : 0.0
     (0 <= s < 1) || error("The CES share `s` must satisfy 0 <= s < 1 (got $s).")
-    if s > 0
-        θ = get(params, :θ, 0.0)
-        θ != 0 || error("The CES curvature `θ` must be non-zero (θ → 0 is the Cobb-Douglas limit, not implemented).")
-    end
     return s
 end
-
+# Utilidad CES y utilidades marginales. Para θ = 0 usa el límite Cobb-Douglas:
+#   U = C^(1-s) E^s,  μC = (1-s) U / C,  μE = s U / E
+# U = [(1-s)C^θ + sE^θ]^(1/θ). En θ = 0 es el límite Cobb-Douglas C^(1-s) E^s.
+function _ces_u(c, e, s, θ)
+    θ == 0 && return c^(1 - s) * e^s
+    return ((1 - s) * c^θ + s * e^θ)^(1 / θ)
+end
 function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
                     year::Int, last_year::Int, eta, prtp, params)
     yi = findfirst(isequal(year), _model_years)
@@ -1553,8 +1555,9 @@ function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
         c = C[t]; e = E[t]
         (ismissing(c) || c <= 0) && error("Consumption per capita must be positive for the CES utility (year $(_model_years[t])).")
         e > 0 || error("Ecosystem services per capita must be positive for the CES utility (year $(_model_years[t])).")
-        u = ((1 - s) * c^θ + s * e^θ)^(1 / θ)
+        u = _ces_u(c, e, s, θ)
         U[t]  = u
+        # Válidas también en θ = 0: c^(θ-1) u^(1-θ) → u/c, y e^(θ-1) u^(1-θ) → u/e
         μC[t] = (1 - s) * c^(θ - 1) * u^(1 - θ)
         μE[t] = s * e^(θ - 1) * u^(1 - θ)
     end
@@ -1570,7 +1573,6 @@ function _scc_moore(mm::MarginalModel, D_total::Vector, gas::Symbol;
 
     return num / μC[yi]
 end
-
 function _scc_derivatives(
     mm::MarginalModel,
     D_total::Vector,
@@ -1603,10 +1605,9 @@ function _scc_derivatives(
         return num
     end
 
-    θ  = get(params, :θ, 0.0)
-    θ2 = get(params, :θ2, 0.0)
+    θ    = get(params, :θ, 0.0)
+    θ2   = get(params, :θ2, 0.0)
     i_pc = get(params, :i_pc, 1.0)
-    (s == 0 || θ != 0) || error("The CES curvature `θ` must be non-zero.")
     (s2 == 0 || θ2 != 0) || error("The CES curvature `θ2` must be non-zero.")
     (s2 == 0 || i_pc > 0) || error("`i_pc` must be positive when s2 > 0.")
 
@@ -1616,8 +1617,8 @@ function _scc_derivatives(
     dC  = zeros(length(_model_years))
     dE  = zeros(length(_model_years))
 
-    ci(c, e) = s == 0 ? c : ((1 - s) * c^θ + s * e^θ)^(1 / θ)
-    f(c, e)  = s2 == 0 ? ci(c, e) : (ci(c, e)^θ2 + s2 * i_pc^θ2)^(1 / θ2)
+    ci(c, e)  = _ces_u(c, e, s, θ)
+    f(c, e)   = s2 == 0 ? ci(c, e) : (ci(c, e)^θ2 + s2 * i_pc^θ2)^(1 / θ2)
     dfc(c, e) = (1 - s) * (ci(c, e) / c)^(1 - θ) * (f(c, e) / ci(c, e))^(1 - θ2)
     dfe(c, e) = s == 0 ? 0.0 : s * (ci(c, e) / e)^(1 - θ) * (f(c, e) / ci(c, e))^(1 - θ2)
 
