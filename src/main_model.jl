@@ -67,7 +67,9 @@ function get_model(; Agriculture_gtap::String = "midDF",
                     Agriculture_floor_on_damages::Bool = true,
                     Agriculture_ceiling_on_benefits::Bool = false,
                     vsl::Symbol= :epa,
-                    forest_emulator::Union{Nothing, Symbol} = nothing
+                    forest_emulator::Union{Nothing, Symbol} = nothing,
+                    forest_damages::Bool = false,
+                    forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0]
                 )
 
     # --------------------------------------------------------------------------
@@ -298,6 +300,23 @@ if forest_emulator !== nothing
     update_param!(m, :ForestEmulator, :e_pop, [0.72, 0.85, 0.57, 0.0])
     update_param!(m, :ForestEmulator, :e_gdp_se, [0.25, 0.33, 0.17, 0.63])
     update_param!(m, :ForestEmulator, :e_pop_se, [0.10, 0.20, 0.08, 0.0])
+
+    # Forest market damages to consumption (rec, hab, nwfp, wat).
+    # Default: only non-wood forest products count as a market loss.
+    update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
+    # The emulator runs 2022–2100; backup = 0 damage outside that span
+    zero_backup = zeros(length(dim_keys(m, :time)), length(countries))
+    connect_param!(m, :DamageAggregator => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
+    connect_param!(m, :Damages_RegionAggregatorSum => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
+    connect_param!(m, :DamageAggregator => :damage_forest_regions, :Damages_RegionAggregatorSum => :damage_forest_regions)
+    update_param!(m, :DamageAggregator, :include_forest, forest_damages)
+else
+    # No forest module: forest damages are zero
+    nt, nc = length(dim_keys(m, :time)), length(countries)
+    update_param!(m, :DamageAggregator, :damage_forest, zeros(nt, nc))
+    update_param!(m, :DamageAggregator, :damage_forest_regions, zeros(nt, length(fund_regions)))
+    update_param!(m, :Damages_RegionAggregatorSum, :damage_forest, zeros(nt, nc))
+    forest_damages && error("forest_damages = true requires forest_emulator (:jules, :lpjml or :mc2)")
 end
 
     # --------------------------------------------------------------------------
