@@ -97,6 +97,7 @@ function update_ciam!(m, m_give, segment_fingerprints)
                     segment_fingerprints.fpLWS_loc  .*  (m_give[:landwater_storage, :lws_sea_level][time_idxs][i] .-  m_give[:landwater_storage, :lws_sea_level][idx_2000])
     end
 
+    
     update_param!(m, :slrcost, :lslr, lslr) # local sea level rise in meters
 
     # Socioeconomics
@@ -105,8 +106,11 @@ function update_ciam!(m, m_give, segment_fingerprints)
     #   per capita) for the slrcost component
     #   (3) get the VSL for each CIAM country
     
-    population  = m_give[:Socioeconomic, :population][time_idxs,country_idxs] # millions 
-    gdp         = m_give[:Socioeconomic, :gdp][time_idxs,country_idxs] .* 1/pricelevel_2010_to_2005 # billion US $2005/yr -> billion US $2010/yr
+    # Single GDP source: adjusted by NaturalCapitalGDP when the component exists
+    gdp_comp = haskey(m_give.md.namespace, :NaturalCapitalGDP) ? :NaturalCapitalGDP : :Socioeconomic
+
+    population  = m_give[:Socioeconomic, :population][time_idxs,country_idxs] # millions
+    gdp         = m_give[gdp_comp, :gdp][time_idxs,country_idxs] .* 1/pricelevel_2010_to_2005
     ypcc        = gdp ./ population .* 1000 # USD $2010/yr/person
 
     update_param!(m, :slrcost, :pop, population) # population in millions

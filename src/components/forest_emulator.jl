@@ -6,7 +6,7 @@
     # --- Parámetros ---
     temperature    = Parameter(index=[time], unit="degC")
     population     = Parameter(index=[time, country])
-    pc_gdp         = Parameter(index=[time, country])
+    gdp = Parameter(index=[time, country], unit="billion US\$2005/yr")
     region_country = Parameter{Int}(index=[forest_regions])
     A_Mha = Parameter(index=[forest_regions])
     F0    = Parameter(index=[forest_regions])
@@ -67,8 +67,11 @@
     country_damage = Variable(index=[time, country], unit="US\$2005/yr")
     ir_pop        = Variable(index=[time, forest_regions])
     ir_gdppc      = Variable(index=[time, forest_regions])
+    global_hab_value = Variable(index=[time])
 
     function run_timestep(p, v, d, t)
+        pcg(t, c) = p.gdp[t, c] / p.population[t, c] * 1e3   # mismo cálculo que PerCapitaGDP
+
         # The emulator starts in 2022, so the first timestep is the calibration
         # reference: x = T(t) - T(2022), and population/GDP per capita are
         # normalized to their 2022 values.
@@ -76,7 +79,7 @@
             v.T_ref = p.temperature[t]
             for c in d.country
                 v.pop0[c] = p.population[t, c]
-                v.gdp0[c] = p.pc_gdp[t, c]
+                v.gdp0[c] = pcg(t, c)
             end
         end
 
@@ -100,7 +103,7 @@
         fac = zeros(length(d.country), 4)
         for c in d.country, s in 1:4
             pr = p.population[t, c] / v.pop0[c]
-            gr = p.pc_gdp[t, c] / v.gdp0[c]
+            gr = pcg(t, c) / v.gdp0[c]
             fac[c, s] = (isfinite(pr) && isfinite(gr)) ? gr^e_gdp[s] * pr^e_pop[s] : 0.0
         end
 
@@ -127,7 +130,7 @@
                 v.ir_forest_Mha[t, r] = F
                 v.ir_pop[t, r]   = p.population[t, c] * p.pop_share[r]
                 v.ir_gdppc[t, r] = p.pop_share[r] > 0 ?
-                    p.pc_gdp[t, c] * p.gdp_share[r] / p.pop_share[r] : 0.0
+                    pcg(t, c) * p.gdp_share[r] / p.pop_share[r] : 0.0
 
                 for s in 1:4
                     val = p.mv[r, s] * fac[c, s] * F
@@ -139,6 +142,7 @@
         end
         v.global_forest_Mha[t] = gF
         v.global_co2_flow[t]   = gQ
+        v.global_hab_value[t] = sum(v.country_value[t, :, 2])
 
         # Market damage by country: 1e6 USD2020/yr → USD2005/yr
         for c in d.country, s in 1:4

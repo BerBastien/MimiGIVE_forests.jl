@@ -2,8 +2,8 @@
 # CES utility SCC with forest ecosystem services
 #
 # Reproduces the numbers and figures of docs/utility_function.tex:
-#   - SCC 2020 by scenario: original, :moore and :derivatives
-#   - sensitivity of the :moore SCC to s and θ (SSP245)
+#   - SCC 2020 by scenario: original, :forest and :forest_nested
+#   - sensitivity of the :Forest SCC to s and θ (SSP245)
 #   - time paths of C, E, U, marginal utilities and service values
 #
 # Usage:
@@ -51,9 +51,9 @@ function model_for(scenario; forest = true, include_slr = true)
     return m
 end
 
-moore_params(s = S_CENTRAL, θ = THETA_CENTRAL) = (forest = true, s = s, θ = θ)
+forest_params(s = S_CENTRAL, θ = THETA_CENTRAL) = (forest = true, s = s, θ = θ)
 
-deriv_params(s = S_CENTRAL, θ = THETA_CENTRAL) =
+forest_nested_params(s = S_CENTRAL, θ = THETA_CENTRAL) =
     (forest = true, s = s, θ = θ, s2 = 0.10, θ2 = 0.58, i_pc = 1.0)
 
 # ------------------------------------------------------------------------------
@@ -66,10 +66,10 @@ function compute_scc_table()
         m = model_for(sc)
         base = MimiGIVE.compute_scc(m, year = YEAR, eta = ETA, prtp = PRTP)
         mo = MimiGIVE.compute_scc(m, year = YEAR, eta = ETA, prtp = PRTP,
-                                  method = :moore, params = moore_params())
+                                  method = :forest, params = forest_params())
         de = MimiGIVE.compute_scc(m, year = YEAR, eta = ETA, prtp = PRTP,
-                                  method = :derivatives, params = deriv_params())
-        for (label, value) in (("original", base), ("moore", mo), ("derivatives", de))
+                                  method = :forest_nested, params = forest_nested_params())
+        for (label, value) in (("original", base), ("forest", mo), ("forest_nested", de))
             push!(rows, (scenario = sc, method = label, scc = value,
                          pct_change = 100 * (value - base) / base))
         end
@@ -78,7 +78,7 @@ function compute_scc_table()
 end
 
 # ------------------------------------------------------------------------------
-# 2. Sensitivity of the :moore SCC to s and θ (SSP245)
+# 2. Sensitivity of the :forest SCC to s and θ (SSP245)
 
 function compute_sensitivity()
     @info "SCC sensitivity: SSP245"
@@ -87,7 +87,7 @@ function compute_sensitivity()
     rows = NamedTuple[]
     for s in (0.05, 0.10, 0.15), θ in (-0.16, 0.55, 0.86)
         v = MimiGIVE.compute_scc(m, year = YEAR, eta = ETA, prtp = PRTP,
-                                 method = :moore, params = moore_params(s, θ))
+                                 method = :forest, params = forest_params(s, θ))
         push!(rows, (scenario = "SSP245", s = s, θ = θ, scc = v,
                      pct_change = 100 * (v - base) / base))
     end
@@ -103,7 +103,7 @@ function compute_paths(; scenario = "SSP245", s = S_CENTRAL, θ = THETA_CENTRAL)
     mm = MimiGIVE.get_marginal_model(deepcopy(m), year = YEAR, gas = :CO2, pulse_size = 1.0)
     run(mm)
 
-    params = moore_params(s, θ)
+    params = forest_params(s, θ)
     E, _ = MimiGIVE._forest_components(mm, :CO2, params)
 
     i0 = findfirst(==(2020), MimiGIVE._model_years)
@@ -202,7 +202,7 @@ end
 
 function fig_scenarios(tab)
     fig = Figure(size = (1200, 520), fontsize = 13)
-    methods = ["original", "moore", "derivatives"]
+    methods = ["original", "forest", "forest_nested"]
     colors  = ["#4D4D4D", "#0072B2", "#D55E00"]
     xt = (1:length(SCENARIOS), SCENARIOS)
 
@@ -219,7 +219,7 @@ function fig_scenarios(tab)
     ax2 = Axis(fig[1, 2], title = "(b) Cambio vs original", xticks = xt,
                ylabel = "%")
     offsets = [-0.13, 0.13]
-    for (k, method) in enumerate(["moore", "derivatives"])
+    for (k, method) in enumerate(["forest", "forest_nested"])
         sub = tab[tab.method .== method, :]
         xs = collect(1:length(SCENARIOS)) .+ offsets[k]
         barplot!(ax2, xs, sub.pct_change, width = 0.22,
@@ -267,19 +267,19 @@ function main()
     end
 
     println("\nSCC (USD2005/tCO2), año $YEAR, JULES, parámetros centrales")
-    println(rpad("escenario", 10), rpad("original", 14), rpad("moore", 14),
-            rpad("derivatives", 16), "Δ moore")
+    println(rpad("escenario", 10), rpad("original", 14), rpad("forest", 14),
+            rpad("forest_nested", 16), "Δ forest")
     for sc in SCENARIOS
         sub = tab[tab.scenario .== sc, :]
         getv(m) = first(sub.scc[sub.method .== m])
         getp(m) = first(sub.pct_change[sub.method .== m])
         println(rpad(sc, 10), rpad(round(getv("original"), digits = 4), 14),
-                rpad(round(getv("moore"), digits = 4), 14),
-                rpad(round(getv("derivatives"), digits = 4), 16),
-                string(round(getp("moore"), digits = 2), " %"))
+                rpad(round(getv("forest"), digits = 4), 14),
+                rpad(round(getv("forest_nested"), digits = 4), 16),
+                string(round(getp("forest"), digits = 2), " %"))
     end
 
-    println("\nSensibilidad SSP245 (moore):")
+    println("\nSensibilidad SSP245 (forest):")
     for row in eachrow(sort(sens, [:s, :θ]))
         println("  s=", row.s, "  θ=", row.θ, "  SCC=",
                 round(row.scc, digits = 4), "  Δ=", round(row.pct_change, digits = 2), "%")

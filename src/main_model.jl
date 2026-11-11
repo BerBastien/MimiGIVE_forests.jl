@@ -3,57 +3,68 @@ using Mimi, CSVFiles, DataFrames, Query, StatsBase, XLSX, Interpolations, Delimi
 """
     get_model(; Agriculture_gtap::String = "midDF",
                 socioeconomics_source::Symbol = :RFF,
-                SSP_scenario::Union{Nothing, String} = nothing,       
+                SSP_scenario::Union{Nothing, String} = nothing,
                 RFFSPsample::Union{Nothing, Int} = nothing,
                 Agriculture_floor_on_damages::Bool = true,
                 Agriculture_ceiling_on_benefits::Bool = false,
-                vsl::Symbol= :epa
+                vsl::Symbol = :epa,
+                forest_emulator::Union{Nothing, Symbol} = nothing,
+                forest_damages::Bool = false,
+                forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0]
             )
-                
+
 Get a GIVE Model with the given argument Settings
 
--- Socioeconomic -- 
+-- Socioeconomic --
 
-- socioeconomics_source (default :RFF) - The options are :RFF, which uses data from 
-    the RFF socioeconomic projections, or :SSP, which uses data from one of the 
+- socioeconomics_source (default :RFF) - The options are :RFF, which uses data from
+    the RFF socioeconomic projections, or :SSP, which uses data from one of the
     Shared Socioeconomic Pathways
 
-- SSP_scenario (default to nothing) - This setting is used only if one is using 
-    the SSPs as the socioeconomics_source, and the current options are "SSP119", 
+- SSP_scenario (default to nothing) - This setting is used only if one is using
+    the SSPs as the socioeconomics_source, and the current options are "SSP119",
     "SSP126", "SSP245", "SSP370", "SSP585", and this will be used as follows.
     See the SSPs component here: https://github.com/anthofflab/MimiSSPs.jl for more information.
 
     (1) Select the population and GDP trajectories for 2020 through 2300, mapping
         each RCMIP scenario to the SSP (SSP1, 2, 3, 5 respectively)
-    
-    (2) Choose the ar6 scenario for data from 1750 - 2019 and the RCMIP emissions 
+
+    (2) Choose the ar6 scenario for data from 1750 - 2019 and the RCMIP emissions
         scenario from the MimiSSPs component to pull Leach et al. RCMIP scenario
         data for 2020 to 2300 for CO2, CH4, and N2O.
 
-    (NOTE) that if the socioeconomics_source is :RFF this will not be consequential 
-        and ssp245 will be used for the ar6 data from 1750 - 2019 and trace gases 
+    (NOTE) that if the socioeconomics_source is :RFF this will not be consequential
+        and ssp245 will be used for the ar6 data from 1750 - 2019 and trace gases
         from 2020 onwards, while emissions for CO2, CH4, and N2O will come from
         the MimiRFFSPs component.
 
 - RFFSPsample (default to nothing, which will pull the in MimiRFFSPs) - choose
-    the sample for which to run the RFF SP. See the RFFSPs component here: 
+    the sample for which to run the RFF SP. See the RFFSPs component here:
     https://github.com/rffscghg/MimiRFFSPs.jl.
 
--- Agriculture -- 
+-- Agriculture --
 
-- Agriculture_gtap (default midDF) - specify the `Agriculture_gtap` input parameter as one of 
-    `["AgMIP_AllDF", "AgMIP_NoNDF", "highDF", "lowDF", "midDF"]`, indicating which 
-    gtap damage function the component should use. 
+- Agriculture_gtap (default midDF) - specify the `Agriculture_gtap` input parameter as one of
+    `["AgMIP_AllDF", "AgMIP_NoNDF", "highDF", "lowDF", "midDF"]`, indicating which
+    gtap damage function the component should use.
 
- - Agriculture_floor_on_damages (default true) - If `Agriculture_gtap_floor_on_damages` = true, then 
-    the agricultural damages (negative values of the `agcost` variable) in each 
-    timestep will not be allowed to exceed 100% of the size of the  agricultural 
+ - Agriculture_floor_on_damages (default true) - If `Agriculture_gtap_floor_on_damages` = true, then
+    the agricultural damages (negative values of the `agcost` variable) in each
+    timestep will not be allowed to exceed 100% of the size of the  agricultural
     sector in each region.
 
-- Agriculture_ceiling_on_benefits (default false) - If `Agriculture_gtap_ceiling_on_benefits` = true, 
-    then the agricultural benefits (positive values of the `agcost` variable) in 
-    each timestep will not be allowed to exceed 100% of the size of the agricultural 
+- Agriculture_ceiling_on_benefits (default false) - If `Agriculture_gtap_ceiling_on_benefits` = true,
+    then the agricultural benefits (positive values of the `agcost` variable) in
+    each timestep will not be allowed to exceed 100% of the size of the agricultural
     sector in each region.
+
+-- Forest --
+
+- forest_emulator (default nothing) - `:jules`, `:lpjml` or `:mc2`. Adds the forest emulator
+    and the natural capital GDP component. Without it the model is the standard GIVE model.
+- forest_damages (default false) - include forest market damages in consumption damages.
+    Requires forest_emulator.
+- forest_damage_weight (default [0, 0, 1, 0]) - market damage weight per service (rec, hab, nwfp, wat).
 
 -- Other --
 
@@ -62,7 +73,7 @@ Get a GIVE Model with the given argument Settings
 """
 function get_model(; Agriculture_gtap::String = "midDF",
                     socioeconomics_source::Symbol = :RFF,
-                    SSP_scenario::Union{Nothing, String} = nothing,       
+                    SSP_scenario::Union{Nothing, String} = nothing,
                     RFFSPsample::Union{Nothing, Int} = nothing,
                     Agriculture_floor_on_damages::Bool = true,
                     Agriculture_ceiling_on_benefits::Bool = false,
@@ -74,12 +85,12 @@ function get_model(; Agriculture_gtap::String = "midDF",
 
     # --------------------------------------------------------------------------
     # MODEL - Check Arguments
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
 
     if socioeconomics_source == :SSP && isnothing(SSP_scenario)
         error("The socioeconomics_source argument :SSP requires setting a SSP_scenario")
-    end    
-    
+    end
+
     if socioeconomics_source == :RFF && !isnothing(SSP_scenario)
         @warn("You have set a SSP_scenario to a non-nothing value, but note that setting the socioeconomics_source argument to :RFF means that this will have no effect on the model.")
     end
@@ -92,9 +103,13 @@ function get_model(; Agriculture_gtap::String = "midDF",
     SSP_scenario_options = [nothing, "SSP119", "SSP126", "SSP245", "SSP370", "SSP585"]
     SSP_scenario in SSP_scenario_options ? nothing : error("The SSP_scenario must be one of $(SSP_scenario_options)")
 
+    # Fail early if forest damages are requested without the forest emulator
+    forest_damages && isnothing(forest_emulator) &&
+        error("forest_damages = true requires forest_emulator (:jules, :lpjml or :mc2)")
+
     # --------------------------------------------------------------------------
     # MODEL - Model Data and Settings
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
 
     # dimensions and countries/regions lists
     countries           = (load(joinpath(@__DIR__, "..", "data", "Dimension_countries.csv")) |> @select(:CountryISO) |> DataFrame |> Matrix)[:]
@@ -138,20 +153,20 @@ function get_model(; Agriculture_gtap::String = "midDF",
         ar6_scenario = lowercase(SSP_scenario)
     end
 
-    # Baseline mortality use SSP2 as a proxy for SSP4 and SSP1 as a proxy for 
+    # Baseline mortality use SSP2 as a proxy for SSP4 and SSP1 as a proxy for
     # SSP5 per instructions from the literature
     mortality_SSP_map = Dict("SSP1" => "SSP1", "SSP2" => "SSP2", "SSP3" => "SSP3", "SSP4" => "SSP2", "SSP5" => "SSP1")
 
     # Grab the SSP name from the full scenario ie. SSP2 from SSP245
-    if socioeconomics_source == :SSP 
+    if socioeconomics_source == :SSP
         SSP = SSP_scenario[1:4]
     else
         SSP = nothing
     end
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # Model Construction
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
 
     # component first and lasts
     model_first = 1750
@@ -159,8 +174,8 @@ function get_model(; Agriculture_gtap::String = "midDF",
     damages_first = 2020
     model_last = 2300
 
-	# Start with an instance of the FAIR model.
-	m = MimiFAIRv1_6_2.get_model(start_year=model_first, end_year=model_last, ar6_scenario = ar6_scenario)
+    # Start with an instance of the FAIR model.
+    m = MimiFAIRv1_6_2.get_model(start_year=model_first, end_year=model_last, ar6_scenario = ar6_scenario)
 
     # Set Dimensions
     set_dimension!(m, :time, model_first:model_last) # used in all components - already set in FAIR but reset for clarity
@@ -181,12 +196,6 @@ function get_model(; Agriculture_gtap::String = "midDF",
     elseif socioeconomics_source == :SSP
         add_comp!(m, MimiSSPs.SSPs, :Socioeconomic, first = damages_first, before = :ch4_cycle);
     end
-
-    # Add PerCapitaGDP component
-	add_comp!(m, PerCapitaGDP, :PerCapitaGDP, first=damages_first, after = :Socioeconomic);
-
-    # Add VSL component
-	add_comp!(m, VSL, :VSL, first=damages_first, after = :PerCapitaGDP);
 
     # We add an identity component that simply passes values through here
     # This makes it easier to later insert the marginal emission modification component
@@ -225,7 +234,89 @@ function get_model(; Agriculture_gtap::String = "midDF",
     # Add CromarMortality component
     add_comp!(m, cromar_mortality_damages, :CromarMortality, first = damages_first, after = :OceanPH)
 
-    # Add Agriculture components
+    # --------------------------------------------------------------------------
+    # Natural capital GDP and forest emulator (before any GDP consumer)
+    # --------------------------------------------------------------------------
+
+    # Single GDP source for everything downstream of natural capital.
+    # Without emulator: SSP/RFF GDP. With emulator: GDP adjusted by NaturalCapitalGDP.
+    gdp_src = isnothing(forest_emulator) ? (:Socioeconomic, :gdp) : (:NaturalCapitalGDP, :gdp)
+
+    if isnothing(forest_emulator)
+
+        add_comp!(m, PerCapitaGDP, :PerCapitaGDP, first = damages_first, after = :Socioeconomic)
+        add_comp!(m, VSL, :VSL, first = damages_first, after = :PerCapitaGDP)
+
+    else
+
+        reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
+        country_idx = Dict(c => i for (i, c) in enumerate(countries))
+
+        set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
+        set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
+
+        # Regressions are calibrated on 2022-2300; the component uses 2022 as reference year
+        add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2300, after = :TempNorm_1995to2005)
+        add_comp!(m, NaturalCapitalGDP, :NaturalCapitalGDP, first = damages_first, after = :ForestEmulator)
+        add_comp!(m, PerCapitaGDP, :PerCapitaGDP, first = damages_first, after = :NaturalCapitalGDP)
+        add_comp!(m, VSL, :VSL, first = damages_first, after = :PerCapitaGDP)
+
+        # ForestEmulator reads UNADJUSTED GDP from Socioeconomic (avoids a cycle)
+        connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
+        connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
+        connect_param!(m, :ForestEmulator, :gdp, :Socioeconomic, :gdp)
+
+        # NaturalCapitalGDP: GDP adjusted by natural capital
+        connect_param!(m, :NaturalCapitalGDP, :gdp_ssp, :Socioeconomic, :gdp)
+
+        # ForestEmulator starts in 2022; NaturalCapitalGDP starts in 2020.
+        # The backup (zeros) makes S_hab = 0 in 2020-2021, so the adjustment stays off there.
+        connect_param!(m, :NaturalCapitalGDP => :S_hab, :ForestEmulator => :global_hab_value,
+               zeros(length(dim_keys(m, :time))))
+        update_param!(m, :NaturalCapitalGDP, :S_ref, zeros(length(dim_keys(m, :time))))  # set by set_natural_capital_reference!
+        update_param!(m, :NaturalCapitalGDP, :b, zeros(length(countries)))              # replace with CSV later
+        update_param!(m, :NaturalCapitalGDP, :use_nc, false)
+
+        # ForestEmulator parameters
+        update_param!(m, :ForestEmulator, :region_country, [get(country_idx, i, 0) for i in reg.iso])
+        update_param!(m, :ForestEmulator, :A_Mha, reg.region_area_ha ./ 1e6)
+        update_param!(m, :ForestEmulator, :F0, reg.forest_Mha_2022)
+        update_param!(m, :ForestEmulator, :b1, reg.forest_b1_Mha_per_C)
+        update_param!(m, :ForestEmulator, :b2, reg.forest_b2_Mha_per_C2)
+        update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
+        update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
+        update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
+
+        se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # missing standard error = no uncertainty
+        update_param!(m, :ForestEmulator, :b1_se, se(:forest_b1_se_Mha_per_C))
+        update_param!(m, :ForestEmulator, :b2_se, se(:forest_b2_se_Mha_per_C2))
+        update_param!(m, :ForestEmulator, :c1_se, se(:cveg_b1_se_tC_per_C))
+        update_param!(m, :ForestEmulator, :c2_se, se(:cveg_b2_se_tC_per_C2))
+
+        update_param!(m, :ForestEmulator, :pop_share, Float64.(coalesce.(reg.pop_share, 0.0)))
+        update_param!(m, :ForestEmulator, :gdp_share, Float64.(coalesce.(reg.gdp_share, 0.0)))
+
+        mv_cols = [:rec_usd_ha_yr_2020, :hab_usd_ha_yr_2020, :nwfp_usd_ha_yr_2020, :wat_usd_ha_yr_2020]
+        mv_mat = hcat([Float64.(coalesce.(reg[!, c], 0.0)) for c in mv_cols]...)
+        mv_mat[.!isfinite.(mv_mat)] .= 0.0
+        update_param!(m, :ForestEmulator, :mv, mv_mat)
+
+        # Elasticities: CWON 2024 Non-Wood Forest Technical Report, Table 5.1
+        # Water has no population term, so its population SE is 0.
+        update_param!(m, :ForestEmulator, :e_gdp,    [0.67, 0.79, -1.11, 2.02])
+        update_param!(m, :ForestEmulator, :e_pop,    [0.72, 0.85,  0.57, 0.0])
+        update_param!(m, :ForestEmulator, :e_gdp_se, [0.25, 0.33,  0.17, 0.63])
+        update_param!(m, :ForestEmulator, :e_pop_se, [0.10, 0.20,  0.08, 0.0])
+
+        # Market damage weights (rec, hab, nwfp, wat). Default: only nwfp.
+        update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
+
+    end
+
+    # --------------------------------------------------------------------------
+    # Agriculture components
+    # --------------------------------------------------------------------------
+
     add_comp!(m, Agriculture_RegionAggregatorSum, :Agriculture_aggregator_population, first = damages_first, after = :CromarMortality);
     add_comp!(m, Agriculture_RegionAggregatorSum, :Agriculture_aggregator_gdp, first = damages_first, after = :Agriculture_aggregator_population);
     add_comp!(m, MimiMooreEtAlAgricultureImpacts.Agriculture, :Agriculture, first = damages_first, after = :Agriculture_aggregator_gdp);
@@ -246,78 +337,30 @@ function get_model(; Agriculture_gtap::String = "midDF",
 
     # Add Howard and Sterner damage components
     add_comp!(m, hs_damage, :hs_damage, first = damages_first, after = :dice2016R2_damage);
-       
+
     # Add DamageAggregator component and regional damages aggregator helper function
     add_comp!(m, Damages_RegionAggregatorSum, first = damages_first);
     add_comp!(m, DamageAggregator, first = damages_first);
+
+    # Forest damage connections (need DamageAggregator to exist, so they go here)
+    nt, nc = length(dim_keys(m, :time)), length(countries)
+    if !isnothing(forest_emulator)
+        zero_backup = zeros(nt, nc)
+        connect_param!(m, :DamageAggregator => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
+        connect_param!(m, :Damages_RegionAggregatorSum => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
+        connect_param!(m, :DamageAggregator => :damage_forest_regions, :Damages_RegionAggregatorSum => :damage_forest_regions)
+        update_param!(m, :DamageAggregator, :include_forest, forest_damages)
+    else
+        update_param!(m, :DamageAggregator, :damage_forest, zeros(nt, nc))
+        update_param!(m, :DamageAggregator, :damage_forest_regions, zeros(nt, length(fund_regions)))
+        update_param!(m, :Damages_RegionAggregatorSum, :damage_forest, zeros(nt, nc))
+    end
 
     # Add net consumption components (global and regional)
     add_comp!(m, GlobalNetConsumption, :global_netconsumption, first = damages_first, after=:DamageAggregator)
     add_comp!(m, RegionalNetConsumption, :regional_netconsumption, first = damages_first, after=:global_netconsumption)
     add_comp!(m, CountryNetConsumption, :country_netconsumption, first = damages_first, after = :regional_netconsumption)
-if forest_emulator !== nothing
-    reg = load(joinpath(@__DIR__, "..", "data", "Forest", "regions_$(forest_emulator).csv")) |> DataFrame
-    country_idx = Dict(c => i for (i, c) in enumerate(countries))
 
-    set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
-    set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
-
-    # The regressions are calibrated on 2022-2100; the component uses 2022 as
-    # its reference year for temperature, population and GDP per capita.
-    add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2100,
-              after = :TempNorm_1995to2005)
-
-    connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
-    connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
-    connect_param!(m, :ForestEmulator, :pc_gdp, :PerCapitaGDP, :pc_gdp)
-
-    update_param!(m, :ForestEmulator, :region_country, [get(country_idx, i, 0) for i in reg.iso])
-    update_param!(m, :ForestEmulator, :A_Mha, reg.region_area_ha ./ 1e6)
-    update_param!(m, :ForestEmulator, :F0, reg.forest_Mha_2022)
-    update_param!(m, :ForestEmulator, :b1, reg.forest_b1_Mha_per_C)
-    update_param!(m, :ForestEmulator, :b2, reg.forest_b2_Mha_per_C2)
-    update_param!(m, :ForestEmulator, :C0, reg.cveg_tC_2022)
-    update_param!(m, :ForestEmulator, :c1, reg.cveg_b1_tC_per_C)
-    update_param!(m, :ForestEmulator, :c2, reg.cveg_b2_tC_per_C2)
-
-    se(col) = Float64.(coalesce.(reg[!, col], 0.0))   # missing standard error = no uncertainty
-    update_param!(m, :ForestEmulator, :b1_se, se(:forest_b1_se_Mha_per_C))
-    update_param!(m, :ForestEmulator, :b2_se, se(:forest_b2_se_Mha_per_C2))
-    update_param!(m, :ForestEmulator, :c1_se, se(:cveg_b1_se_tC_per_C))
-    update_param!(m, :ForestEmulator, :c2_se, se(:cveg_b2_se_tC_per_C2))
-
-    update_param!(m, :ForestEmulator, :pop_share, Float64.(coalesce.(reg.pop_share, 0.0)))
-    update_param!(m, :ForestEmulator, :gdp_share, Float64.(coalesce.(reg.gdp_share, 0.0)))
-
-    mv_cols = [:rec_usd_ha_yr_2020, :hab_usd_ha_yr_2020, :nwfp_usd_ha_yr_2020, :wat_usd_ha_yr_2020]
-    mv_mat = hcat([Float64.(coalesce.(reg[!, c], 0.0)) for c in mv_cols]...)
-    mv_mat[.!isfinite.(mv_mat)] .= 0.0
-    update_param!(m, :ForestEmulator, :mv, mv_mat)
-
-    # Elasticidades: CWON 2024 Non-Wood Forest Technical Report, Tabla 5.1
-    # Agua no tiene término poblacional, por eso su SE de población es 0.
-    update_param!(m, :ForestEmulator, :e_gdp, [0.67, 0.79, -1.11, 2.02])
-    update_param!(m, :ForestEmulator, :e_pop, [0.72, 0.85, 0.57, 0.0])
-    update_param!(m, :ForestEmulator, :e_gdp_se, [0.25, 0.33, 0.17, 0.63])
-    update_param!(m, :ForestEmulator, :e_pop_se, [0.10, 0.20, 0.08, 0.0])
-
-    # Forest market damages to consumption (rec, hab, nwfp, wat).
-    # Default: only non-wood forest products count as a market loss.
-    update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
-    # The emulator runs 2022–2100; backup = 0 damage outside that span
-    zero_backup = zeros(length(dim_keys(m, :time)), length(countries))
-    connect_param!(m, :DamageAggregator => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
-    connect_param!(m, :Damages_RegionAggregatorSum => :damage_forest, :ForestEmulator => :country_damage, zero_backup)
-    connect_param!(m, :DamageAggregator => :damage_forest_regions, :Damages_RegionAggregatorSum => :damage_forest_regions)
-    update_param!(m, :DamageAggregator, :include_forest, forest_damages)
-else
-    # No forest module: forest damages are zero
-    nt, nc = length(dim_keys(m, :time)), length(countries)
-    update_param!(m, :DamageAggregator, :damage_forest, zeros(nt, nc))
-    update_param!(m, :DamageAggregator, :damage_forest_regions, zeros(nt, length(fund_regions)))
-    update_param!(m, :Damages_RegionAggregatorSum, :damage_forest, zeros(nt, nc))
-    forest_damages && error("forest_damages = true requires forest_emulator (:jules, :lpjml or :mc2)")
-end
 
     # --------------------------------------------------------------------------
 	# Shared Model Parameters
@@ -357,7 +400,7 @@ end
 	# Component-Specific Parameters and Connections
     # --------------------------------------------------------------------------
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # BRICK
     # --------------------------------------------------------------------------
 
@@ -438,7 +481,7 @@ end
     update_param!(m, :GlobalSLRNorm_1900, :norm_range_start, 1900)
     update_param!(m, :GlobalSLRNorm_1900, :norm_range_end, 1900)
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # Create Component Connections
 
     connect_param!(m, :global_sea_level => :slr_glaciers_small_ice_caps, :glaciers_small_icecaps => :gsic_sea_level)
@@ -454,10 +497,10 @@ end
     connect_param!(m, :antarctic_ocean => :global_surface_temperature, :temperature => :T)
     connect_param!(m, :glaciers_small_icecaps => :global_surface_temperature, :temperature => :T)
     connect_param!(m, :greenland_icesheet => :global_surface_temperature, :temperature => :T)
-    
+
     connect_param!(m, :GlobalSLRNorm_1900 => :global_slr, :global_sea_level => :sea_level_rise)
-    
-    # --------------------------------------------------------------------------    
+
+    # --------------------------------------------------------------------------
     # OceanPH
     # --------------------------------------------------------------------------
 
@@ -467,7 +510,7 @@ end
 
 	connect_param!(m, :OceanPH => :atm_co2_conc, :co2_cycle => :co2)
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # Socioeconomic
     # --------------------------------------------------------------------------
 
@@ -486,7 +529,7 @@ end
 
     # Load IPCC AR6 emissions scenario used for FAIRv1.6.2 ensemble runs (options = "ssp119", "ssp126", "ssp245", "ssp370", "ssp460", "ssp585").
     ar6_emissions_raw = DataFrame(load(joinpath(@__DIR__, "..", "data", "FAIR_ar6", "AR6_emissions_"*ar6_scenario*"_1750_2300.csv")))
-    
+
     # Subset AR6 emissions to proper years.
     emission_indices = indexin(collect(model_first:model_last), ar6_emissions_raw.Year)
     ar6_emissions = ar6_emissions_raw[emission_indices, :]
@@ -506,20 +549,20 @@ end
 
     # Land Use CO2 Emissions - FAIRv1.6.2 component :landuse_forcing and parameter :landuse_emiss
     #
-    # For the SSPs, the MimiSSPs component does not break carbon dioxide out by industrial 
-    # and other, so we will simply let FAIR1.6.2 run with its original settings for land use CO2, which is 
-    # consistent with Leach (FAIRv2.0) but just not broken out in that dataset, so this is consistent. 
+    # For the SSPs, the MimiSSPs component does not break carbon dioxide out by industrial
+    # and other, so we will simply let FAIR1.6.2 run with its original settings for land use CO2, which is
+    # consistent with Leach (FAIRv2.0) but just not broken out in that dataset, so this is consistent.
     # For the RFF SPs we can either let them run with the middle-of the road and best matched (pop and emissions)
     # ssp245 AR6 scenario, or explicitly connect new data. Currently do the former.
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # PerCapitaGDP
-    # -------------------------------------------------------------------------- 
+    # --------------------------------------------------------------------------
 
-    connect_param!(m, :PerCapitaGDP => :gdp, :Socioeconomic => :gdp)
-    connect_param!(m, :PerCapitaGDP => :population, :Socioeconomic => :population)
+    connect_param!(m, :PerCapitaGDP, :gdp, gdp_src...)
+    connect_param!(m, :PerCapitaGDP, :population, :Socioeconomic, :population)
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # VSL
     # --------------------------------------------------------------------------
 
@@ -528,7 +571,7 @@ end
         update_param!(m, :VSL, :y₀, 24_962.6131444313  * pricelevel_1995_to_2005)   # convert from FUND USD $1995 to USD $2005
     elseif vsl==:epa
 	    update_param!(m, :VSL, :α,  7.73514707e6)                                   # 2020 EPA VSL in 2005$. See DataExplainer.ipynb for information
-        update_param!(m, :VSL, :y₀, 48_726.60)                                      # 2020 U.S. income per capita in 2005$; See DataExplainer.ipynb for information  
+        update_param!(m, :VSL, :y₀, 48_726.60)                                      # 2020 U.S. income per capita in 2005$; See DataExplainer.ipynb for information
     elseif vsl==:uba
 	    update_param!(m, :VSL, :α,  5_920_000. / pricelevel_2005_to_2020)           # 2020 UBA Methodenkonvention 3.2 VSL in 2005$
         update_param!(m, :VSL, :y₀, 44_646.78)                                      # 2020 German income per capita in 2005$
@@ -542,10 +585,10 @@ end
 	update_param!(m,  :VSL, :ϵ, 1.0)
 	connect_param!(m, :VSL => :pc_gdp, :PerCapitaGDP => :pc_gdp)
 
-    # --------------------------------------------------------------------------    
+    # --------------------------------------------------------------------------
     # Temperature Normlization Components
     # --------------------------------------------------------------------------
-    
+
     # TempNorm_1880 - Normalize temperature to deviation from 1880 for Howard and Sterner damage function
     update_param!(m, :TempNorm_1880, :norm_range_start, 1880)
     update_param!(m, :TempNorm_1880, :norm_range_end, 1880)
@@ -633,13 +676,13 @@ end
     connect_param!(m, :Agriculture_aggregator_gdp, :input_region_names, :model_ag_mapping_input_regions)
     connect_param!(m, :Agriculture_aggregator_gdp, :output_region_names, :model_ag_mapping_output_regions)
     connect_param!(m, :Agriculture_aggregator_gdp, :input_output_mapping, :model_ag_mapping)
-    connect_param!(m, :Agriculture_aggregator_gdp => :input, :Socioeconomic => :gdp)
+    connect_param!(m, :Agriculture_aggregator_gdp, :gdp, gdp_src...)
 
     if socioeconomics_source == :RFF
         connect_param!(m, :Agriculture_aggregator_gdp90, :input_region_names, :model_ag_mapping_input_regions)
         connect_param!(m, :Agriculture_aggregator_gdp90, :output_region_names, :model_ag_mapping_output_regions)
         connect_param!(m, :Agriculture_aggregator_gdp90, :input_output_mapping, :model_ag_mapping)
-        connect_param!(m, :Agriculture_aggregator_gdp90 => :input, :Socioeconomic => :gdp1990)
+        connect_param!(m, :Agriculture_aggregator_gdp90 => :input, :Socioeconomic => :gdp1990)  # calibration: NOT adjusted
 
         connect_param!(m, :Agriculture_aggregator_pop90, :input_region_names, :model_ag_mapping_input_regions)
         connect_param!(m, :Agriculture_aggregator_pop90, :output_region_names, :model_ag_mapping_output_regions)
@@ -656,10 +699,10 @@ end
     # Handle in pop and gdp 1990 baseline values
     if socioeconomics_source == :SSP
 
-        data1990 = load(joinpath(@__DIR__, "..", "data", "Benveniste_SSPs", "Agriculture_1990vals.csv")) |> 
+        data1990 = load(joinpath(@__DIR__, "..", "data", "Benveniste_SSPs", "Agriculture_1990vals.csv")) |>
                     DataFrame |>
                     @filter(_.SSP == SSP) |>
-                    DataFrame    
+                    DataFrame
         idxs = indexin(data1990.fund_region, fund_regions) # get the ordering of 1990 regions matched to fund regions in model
         !isnothing(findfirst(i -> isnothing(i), idxs)) ? error("FUND regions for RFF Model do not match FUND regions for Agriculture 1990 values.") : nothing
         data1990 = data1990[idxs,:] # reorder based on idxs
@@ -670,7 +713,7 @@ end
     elseif socioeconomics_source == :RFF
         connect_param!(m, :Agriculture => :pop90, :Agriculture_aggregator_pop90 => :output)
         connect_param!(m, :Agriculture => :gdp90, :Agriculture_aggregator_gdp90 => :output)
-    end  
+    end
 
     # Access which of the 5 possible DFs to use for the damage function
     gtap_idx = findfirst(isequal(Agriculture_gtap), MimiMooreEtAlAgricultureImpacts.gtaps)
@@ -696,12 +739,12 @@ end
     # --------------------------------------------------------------------------
 	# Agriculture Damages Disaggregator
     # --------------------------------------------------------------------------
-    
+
     connect_param!(m, :AgricultureDamagesDisaggregator, :mapping, :model_ag_mapping)
     connect_param!(m, :AgricultureDamagesDisaggregator, :fund_region_names, :model_ag_mapping_output_regions)
-    
+
     connect_param!(m, :AgricultureDamagesDisaggregator => :gdp_fund_region, :Agriculture_aggregator_gdp => :output)
-    connect_param!(m, :AgricultureDamagesDisaggregator => :gdp_country, :Socioeconomic => :gdp)
+    connect_param!(m, :AgricultureDamagesDisaggregator, :gdp, gdp_src...)
 
     connect_param!(m, :AgricultureDamagesDisaggregator => :damages_ag_fund_region, :Agriculture => :agcost)
 
@@ -729,7 +772,7 @@ end
     end
 
     set_param!(m, :energy_damages, :β_energy, country_β_energy)
-    connect_param!(m, :energy_damages => :gdp,         :Socioeconomic => :gdp)
+    connect_param!(m, :energy_damages, :gdp, gdp_src...)
     connect_param!(m, :energy_damages => :temperature, :temperature => :T)
 
     # --------------------------------------------------------------------------
@@ -737,14 +780,14 @@ end
     # --------------------------------------------------------------------------
 
     connect_param!(m, :dice2016R2_damage => :temperature, :TempNorm_1900 => :global_temperature_norm)
-    connect_param!(m, :dice2016R2_damage => :gdp, :Socioeconomic => :gdp)
+    connect_param!(m, :dice2016R2_damage, :gdp, gdp_src...)
 
     # --------------------------------------------------------------------------
     # Howard and Sterner Damages
     # --------------------------------------------------------------------------
 
     connect_param!(m, :hs_damage => :temperature, :TempNorm_1880 => :global_temperature_norm)
-    connect_param!(m, :hs_damage => :gdp,  :Socioeconomic => :gdp)
+    connect_param!(m, :hs_damage, :gdp, gdp_src...)
 
     # --------------------------------------------------------------------------
 	# Damage Aggregation
@@ -761,15 +804,15 @@ end
     connect_param!(m, :DamageAggregator => :damage_ag, :Agriculture => :agcost)
     connect_param!(m, :DamageAggregator => :damage_ag_countries, :AgricultureDamagesDisaggregator => :damages_ag_country)
     connect_param!(m, :DamageAggregator => :damage_cromar_mortality, :CromarMortality => :mortality_costs)
-    connect_param!(m, :DamageAggregator => :gdp, :Socioeconomic => :gdp)
+    connect_param!(m, :DamageAggregator, :gdp, gdp_src...)
     connect_param!(m, :DamageAggregator => :damage_energy, :energy_damages => :energy_costs_dollar)
     connect_param!(m, :DamageAggregator => :damage_dice2016R2, :dice2016R2_damage => :damages)
     connect_param!(m, :DamageAggregator => :damage_hs, :hs_damage => :damages)
 
     connect_param!(m, :DamageAggregator => :damage_cromar_mortality_regions, :Damages_RegionAggregatorSum => :damage_cromar_mortality_regions)
     connect_param!(m, :DamageAggregator => :damage_energy_regions, :Damages_RegionAggregatorSum => :damage_energy_regions)
-    
-    domestic_idxs_country_dim = Int.(indexin(dim_keys(m, :domestic_countries), dim_keys(m, :country)))  
+
+    domestic_idxs_country_dim = Int.(indexin(dim_keys(m, :domestic_countries), dim_keys(m, :country)))
     update_param!(m, :DamageAggregator, :domestic_idxs_country_dim, domestic_idxs_country_dim)
 
     domestic_idxs_energy_countries_dim = Int.(indexin(dim_keys(m, :domestic_countries), dim_keys(m, :energy_countries)))
@@ -778,22 +821,21 @@ end
     # --------------------------------------------------------------------------
 	# Net Consumption
     # --------------------------------------------------------------------------
-    
+
     # global
-    connect_param!(m, :global_netconsumption => :gdp, :Socioeconomic => :gdp)
+    connect_param!(m, :global_netconsumption, :gdp, gdp_src...)
     connect_param!(m, :global_netconsumption => :population, :Socioeconomic => :population)
     connect_param!(m, :global_netconsumption => :total_damage, :DamageAggregator => :total_damage)
-    
+
     # regional
     connect_param!(m, :regional_netconsumption => :population, :Agriculture_aggregator_population => :output)
     connect_param!(m, :regional_netconsumption => :gdp, :Agriculture_aggregator_gdp => :output)
     connect_param!(m, :regional_netconsumption => :total_damage, :DamageAggregator => :total_damage_regions)
 
     # country
-    connect_param!(m, :country_netconsumption => :gdp, :Socioeconomic => :gdp)
-    connect_param!(m, :country_netconsumption => :population, :Socioeconomic => :population)
-    connect_param!(m, :country_netconsumption => :total_damage, :DamageAggregator => :total_damage_countries)
-
+    connect_param!(m, :country_netconsumption, :gdp, gdp_src...)
+    connect_param!(m, :country_netconsumption, :population, :Socioeconomic, :population)
+    connect_param!(m, :country_netconsumption, :total_damage, :DamageAggregator, :total_damage_countries)
 
     return m
-end
+end 
