@@ -1,0 +1,13 @@
+method,forest_damages,natural_capital,elasticity,scc_usd2005_per_tco2
+original,false,false,0.1,22.53921936118248
+original,false,true,0.1,22.56536624413987
+original,true,false,0.1,22.539433345985117
+original,true,true,0.1,22.565579845391103
+forest,false,false,0.1,23.202483855451685
+forest,false,true,0.1,23.231288399402754
+forest,true,false,0.1,23.20270089566406
+forest,true,true,0.1,23.23150506791924
+forest_nested,false,false,0.1,22.58943736057011
+forest_nested,false,true,0.1,22.616115988983328
+forest_nested,true,false,0.1,22.5896517207306
+forest_nested,true,true,0.1,22.616329967366323

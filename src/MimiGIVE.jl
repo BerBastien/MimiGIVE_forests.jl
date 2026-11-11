@@ -36,6 +36,7 @@ include("components/OceanHeatAccumulator.jl")
 include("components/GlobalSLRNorm.jl")
 include("components/Damages_RegionAggregatorSum.jl")
 include("components/forest_emulator.jl")
+include("components/natural_capital_gdp.jl")
 include("components/CountryTemperaturePatternScaling.jl")
 include("components/CountryTempNorm.jl")
 

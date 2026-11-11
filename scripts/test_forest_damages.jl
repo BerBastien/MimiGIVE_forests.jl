@@ -9,8 +9,8 @@
 #     w_s     share of service s counted as a market loss
 #             default [rec, hab, nwfp, wat] = [0, 0, 1, 0]
 # D enters DamageAggregator like agriculture or energy and lowers net
-# consumption, so it reaches the SCC. The emulator runs 2022–2100; damage is 0
-# outside that span.
+# consumption, so it reaches the SCC. The emulator runs 2022–2300 (regressions
+# estimated on 2022–2100 and extrapolated afterwards); damage is 0 outside that span.
 #
 # Checks
 #   1) forest_damages = false → SCC identical to the model without the change.

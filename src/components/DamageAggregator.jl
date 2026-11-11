@@ -79,7 +79,7 @@ using Mimi
                 (p.include_forest           ? p.damage_forest_regions[t,r] : 0.)
         end
 
-        # forest emulator runs 2022–2100: missing outside that span counts as 0
+        # forest emulator runs 2022–2300: missing outside that span counts as 0
         forest_t = coalesce.(p.damage_forest[t,:], 0.)
 
         # country level aggregates where ag damages disaggregated via method in

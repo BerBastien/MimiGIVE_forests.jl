@@ -1,11 +1,36 @@
+# Forest and ecosystem services emulator.
+#
+# Maps global mean temperature (and population / GDP per capita) to forest area
+# and ecosystem service values at the impact-region (IR) level. It is optional:
+# when it is added, NaturalCapitalGDP uses its habitat value as the natural
+# capital stock, and DamageAggregator can add its market damages to consumption.
+#
+# Equations. With x = T(t) - T(2022) and services s = rec, hab, nwfp, wat:
+#
+#   F(r,t)   = min(A(r), max(0, F0(r) + b1(r)*x + b2(r)*x^2))            [Mha]
+#   C(r,t)   = max(0, C0(r) + c1(r)*x + c2(r)*x^2)                       [tC]
+#   V(r,s,t) = mv(r,s) * fac(c,s,t) * F(r,t)                             [1e6 USD2020/yr]
+#   fac      = (pcGDP(c,t)/pcGDP(c,2022))^e_gdp(s) * (pop(c,t)/pop(c,2022))^e_pop(s)
+#
+# Time span. The regional regressions are estimated on 2022-2100. The model
+# carries the emulator to 2300 by evaluating the same quadratic after 2100
+# (extrapolation), with the forest area capped at the region area A and the
+# vegetation carbon floored at zero, so both stay in a physically plausible
+# range. Set `last` to 2100 to run the calibrated period only.
+#
+# The emulator starts in 2022, so the first timestep is the calibration
+# reference: x = 0, population and GDP per capita normalized to their 2022
+# values.
 @defcomp ForestEmulator begin
     country        = Index()
     forest_regions = Index()
     services       = Index()     # 1=rec, 2=hab, 3=nwfp, 4=wat
 
-    # --- Parámetros ---
+    # --- Parameters ---
     temperature    = Parameter(index=[time], unit="degC")
     population     = Parameter(index=[time, country])
+    # Unadjusted GDP: the emulator feeds NaturalCapitalGDP, so reading the
+    # adjusted GDP here would create a cycle.
     gdp = Parameter(index=[time, country], unit="billion US\$2005/yr")
     region_country = Parameter{Int}(index=[forest_regions])
     A_Mha = Parameter(index=[forest_regions])
@@ -26,7 +51,7 @@
     z_b2 = Parameter(default = 0.0)
     z_c1 = Parameter(default = 0.0)
     z_c2 = Parameter(default = 0.0)
-    mv    = Parameter(index=[forest_regions, services])   # USD2020/ha/año
+    mv    = Parameter(index=[forest_regions, services])   # USD2020/ha/yr
     e_gdp = Parameter(index=[services])
     e_pop = Parameter(index=[services])
     # Elasticity uncertainty: robust standard errors of the meta-regression
@@ -46,7 +71,7 @@
     # Forest damages to consumption (market part of the services)
     # damage_weight[s] = share of service s counted as a market loss (0 = none, 1 = all)
     damage_weight  = Parameter(index=[services])
-    usd2020_to_2005 = Parameter(default = 0.773)   # US GDP deflator 2005/2020 (to verify)
+    usd2020_to_2005 = Parameter(default = 0.773)   # US GDP deflator 2005/2020
     pop_share = Parameter(index=[forest_regions])
     gdp_share = Parameter(index=[forest_regions])
 
@@ -56,21 +81,25 @@
     pop0      = Variable(index=[country])
     gdp0      = Variable(index=[country])
     global_forest_Mha  = Variable(index=[time])
-    global_co2_flow    = Variable(index=[time])                  # t CO2/año
+    global_co2_flow    = Variable(index=[time])                  # t CO2/yr
     country_forest_Mha = Variable(index=[time, country])
-    country_co2_flow   = Variable(index=[time, country])         # t CO2/año
-    country_value      = Variable(index=[time, country, services])  # USD/ha × Mha = 1e6 USD/año
-    country_value_nocl = Variable(index=[time, country, services])  # bosque fijo, socio evolutiva
+    country_co2_flow   = Variable(index=[time, country])         # t CO2/yr
+    country_value      = Variable(index=[time, country, services])  # 1e6 USD/yr
+    country_value_nocl = Variable(index=[time, country, services])  # forest fixed, socioeconomic evolves
     ir_forest_Mha = Variable(index=[time, forest_regions])
     ir_value      = Variable(index=[time, forest_regions, services])
-    # Climate-driven loss of market value: (value with forest fixed at 2022) − (value with climate)
+    # Climate-driven loss of market value: (value with forest fixed at 2022) - (value with climate)
     country_damage = Variable(index=[time, country], unit="US\$2005/yr")
     ir_pop        = Variable(index=[time, forest_regions])
     ir_gdppc      = Variable(index=[time, forest_regions])
-    global_hab_value = Variable(index=[time])
+    # Global value of habitat services in the run and in its no-climate
+    # counterfactual (forest fixed at 2022, socioeconomics evolve). Their ratio
+    # is the natural capital stock index used by NaturalCapitalGDP.
+    global_hab_value      = Variable(index=[time])
+    global_hab_value_nocl = Variable(index=[time])
 
     function run_timestep(p, v, d, t)
-        pcg(t, c) = p.gdp[t, c] / p.population[t, c] * 1e3   # mismo cálculo que PerCapitaGDP
+        pcg(t, c) = p.gdp[t, c] / p.population[t, c] * 1e3   # same calculation as PerCapitaGDP
 
         # The emulator starts in 2022, so the first timestep is the calibration
         # reference: x = T(t) - T(2022), and population/GDP per capita are
@@ -94,7 +123,7 @@
         v.ir_pop[t, :]        .= 0.0
         v.ir_gdppc[t, :]      .= 0.0
 
-        # Elasticities for this run = estimate + shock × standard error
+        # Elasticities for this run = estimate + shock * standard error
         z_gdp = (p.z_egdp_rec, p.z_egdp_hab, p.z_egdp_nwfp, p.z_egdp_wat)
         z_pop = (p.z_epop_rec, p.z_epop_hab, p.z_epop_nwfp, p.z_epop_wat)
         e_gdp = [p.e_gdp[s] + z_gdp[s] * p.e_gdp_se[s] for s in 1:4]
@@ -111,11 +140,14 @@
         gQ = 0.0
         x = p.temperature[t] - v.T_ref
         for r in d.forest_regions
-            # Coefficient for this run = estimate + shock × standard error
+            # Coefficient for this run = estimate + shock * standard error
             b1 = p.b1[r] + p.z_b1 * p.b1_se[r]
             b2 = p.b2[r] + p.z_b2 * p.b2_se[r]
             c1 = p.c1[r] + p.z_c1 * p.c1_se[r]
             c2 = p.c2[r] + p.z_c2 * p.c2_se[r]
+            # Quadratic in x. After 2100 this is an extrapolation of the
+            # regression estimated on 2022-2100; A and the zero floor keep it
+            # within a plausible range.
             F = min(p.A_Mha[r], max(0.0, p.F0[r] + b1*x + b2*x^2))
             C = max(0.0, p.C0[r] + c1*x + c2*x^2)
             flow = is_first(t) ? 0.0 : (C - v.cveg_prev[r]) * 44 / 12
@@ -142,9 +174,10 @@
         end
         v.global_forest_Mha[t] = gF
         v.global_co2_flow[t]   = gQ
-        v.global_hab_value[t] = sum(v.country_value[t, :, 2])
+        v.global_hab_value[t]      = sum(v.country_value[t, :, 2])
+        v.global_hab_value_nocl[t] = sum(v.country_value_nocl[t, :, 2])
 
-        # Market damage by country: 1e6 USD2020/yr → USD2005/yr
+        # Market damage by country: 1e6 USD2020/yr -> USD2005/yr
         for c in d.country, s in 1:4
             loss = v.country_value_nocl[t, c, s] - v.country_value[t, c, s]
             v.country_damage[t, c] += p.damage_weight[s] * loss * 1e6 * p.usd2020_to_2005

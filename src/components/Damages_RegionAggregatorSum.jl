@@ -36,7 +36,7 @@ using Mimi
         for i in d.ag_mapping_input_regions
             v.damage_cromar_mortality_regions[t, v.input_output_mapping_int[i]] += p.damage_cromar_mortality[t,i]
             v.damage_energy_regions[t, v.input_output_mapping_int[i]] += p.damage_energy[t,i]
-            # forest emulator runs 2022–2100: missing outside that span counts as 0
+            # forest emulator runs 2022–2300: missing outside that span counts as 0
             v.damage_forest_regions[t, v.input_output_mapping_int[i]] += coalesce(p.damage_forest[t,i], 0.)
         end
     end

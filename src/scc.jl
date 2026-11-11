@@ -105,7 +105,7 @@ function compute_scc(m::Model = get_model();
     !(gas in gases_list) ? error("Invalid value of $gas for gas, gas must be one of $(gases_list).") : nothing
     
     # post-process the provided discount rates for backwards compatibility
-        # Parámetros predeterminados para los métodos alternativos
+        # Default parameters for the alternative methods
     if params === nothing
         if method == :forest || method == :forest_nested
             params = FOREST_DEFAULT_PARAMS
@@ -150,7 +150,7 @@ function compute_scc(m::Model = get_model();
                             params = params
                         )
     else
-         method == :original || error("method = $method solo está implementado para n = 0.")
+         method == :original || error("method = $method is only implemented for n = 0.")
         isnothing(discount_rates) ? error("To run the Monte Carlo compute_scc function (n != 0), please use the `discount_rates` argument.") : nothing
         
         # Set up output directories
@@ -245,12 +245,12 @@ function _compute_scc(mm::MarginalModel;
     # Alternative SCC methods with ecosystem services in the utility function
     if method != :original
         domestic &&
-            error("Los métodos :forest y :forest_nested solo calculan el SCC global; usa compute_domestic_values = false.")
+            error("The :forest and :forest_nested methods only compute the global SCC; use compute_domestic_values = false.")
         discount_rates === nothing ||
-            error("Los métodos :forest y :forest_nested no usan discount_rates.")
+            error("The :forest and :forest_nested methods do not use discount_rates.")
 
         params === nothing &&
-            error("Pasa `params` para el método $method.")
+            error("Pass `params` for method $method.")
 
         if method == :forest
             return _scc_forest(
@@ -275,7 +275,7 @@ function _compute_scc(mm::MarginalModel;
             )
 
         else
-            error("method debe ser :original, :forest o :forest_nested.")
+            error("method must be :original, :forest or :forest_nested.")
         end
     end
 
@@ -1414,7 +1414,7 @@ end
 #
 # where μ_C,t = ∂U_t/∂C_t and μ_E,t = ∂U_t/∂E_t, and MD_C and MD_E are the
 # marginal damages (positive) to consumption and ecosystem services per tonne
-# of the gas. E and MD_E come from ForestEmulator and only cover 2022-2100.
+# of the gas. E and MD_E come from ForestEmulator and cover 2022-2300.
 
 const FOREST_DEFAULT_PARAMS = (
     forest = true,
@@ -1512,9 +1512,9 @@ function _check_utility_params(params)
     (0 <= s < 1) || error("The CES share `s` must satisfy 0 <= s < 1 (got $s).")
     return s
 end
-# Utilidad CES y utilidades marginales. Para θ = 0 usa el límite Cobb-Douglas:
+# CES utility and marginal utilities. For θ = 0 use the Cobb-Douglas limit:
 #   U = C^(1-s) E^s,  μC = (1-s) U / C,  μE = s U / E
-# U = [(1-s)C^θ + sE^θ]^(1/θ). En θ = 0 es el límite Cobb-Douglas C^(1-s) E^s.
+# U = [(1-s)C^θ + sE^θ]^(1/θ). At θ = 0 this is the Cobb-Douglas limit C^(1-s) E^s.
 function _ces_u(c, e, s, θ)
     θ == 0 && return c^(1 - s) * e^s
     return ((1 - s) * c^θ + s * e^θ)^(1 / θ)
@@ -1554,7 +1554,7 @@ function _scc_forest(mm::MarginalModel, D_total::Vector, gas::Symbol;
         e > 0 || error("Ecosystem services per capita must be positive for the CES utility (year $(_model_years[t])).")
         u = _ces_u(c, e, s, θ)
         U[t]  = u
-        # Válidas también en θ = 0: c^(θ-1) u^(1-θ) → u/c, y e^(θ-1) u^(1-θ) → u/e
+        # Also valid at θ = 0: c^(θ-1) u^(1-θ) → u/c, and e^(θ-1) u^(1-θ) → u/e
         μC[t] = (1 - s) * c^(θ - 1) * u^(1 - θ)
         μE[t] = s * e^(θ - 1) * u^(1 - θ)
     end
@@ -1588,7 +1588,7 @@ function _scc_forest_nested(
     s2 = get(params, :forest, true) ? get(params, :s2, 0.0) : 0.0
     (0 <= s2 < 1) || error("The CES share `s2` must satisfy 0 <= s2 < 1 (got $s2).")
 
-    # Con s = 0 la utilidad es U = C, así que el SCC es el original de GIVE.
+    # With s = 0 the utility is U = C, so the SCC is the original GIVE one.
     if s == 0
         num = 0.0
         for t in yi:li

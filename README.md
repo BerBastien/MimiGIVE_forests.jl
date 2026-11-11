@@ -50,11 +50,16 @@ The `get_model` function above has the signature and options as follows:
 ```julia
 function get_model(; Agriculture_gtap::String = "midDF",
                     socioeconomics_source::Symbol = :RFF,
-                    SSP_scenario::Union{Nothing, String} = nothing,       
+                    SSP_scenario::Union{Nothing, String} = nothing,
                     RFFSPsample::Union{Nothing, Int} = nothing,
                     Agriculture_floor_on_damages::Bool = true,
                     Agriculture_ceiling_on_benefits::Bool = false,
-                    vsl::Symbol= :epa
+                    vsl::Symbol = :epa,
+                    forest_emulator::Union{Nothing, Symbol} = nothing,
+                    forest_damages::Bool = false,
+                    forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0],
+                    natural_capital::Bool = false,
+                    natural_capital_elasticity::Union{Float64, Vector{Float64}} = 0.0
                 )
 ```
 The relevant arguments above are described as:
@@ -100,14 +105,18 @@ The relevant arguments above are described as:
     each timestep will not be allowed to exceed 100% of the size of the agricultural 
     sector in each region.
 
-**Forest and Non-value ecosistem services**
-- forest_emulator (default nothing) - If set to `:jules`, `:lpjml` or `:mc2`, adds the `ForestEmulator`    component
-    (2022-2100) using the regional table `data/Forest/regions_<name>.csv`. See Section 2c.
+**Forest, ecosystem services and natural capital**
 
-```julia    
-vsl::Symbol= :epa,
-forest_emulator::Union{Nothing, Symbol} = nothing
-```  
+- forest_emulator (default nothing) - If set to `:jules`, `:lpjml` or `:mc2`, adds the `ForestEmulator`
+    component (2022-2300) using the regional table `data/Forest/regions_<name>.csv`, plus the
+    `NaturalCapitalGDP` component that every GDP consumer reads from. See Section 2c.
+- forest_damages (default false) - include the market forest damages in consumption damages.
+    Requires `forest_emulator`.
+- forest_damage_weight (default [0, 0, 1, 0]) - market damage weight per service (rec, hab, nwfp, wat).
+- natural_capital (default false) - on/off switch of the natural capital adjustment of GDP.
+    Requires `forest_emulator`. See Section 2c.
+- natural_capital_elasticity (default 0.0) - elasticity of GDP to natural capital, one value for all
+    countries or one value per country. `0.0` leaves GDP unchanged even with the switch on.
 
 
 **Other**
@@ -146,11 +155,12 @@ run(m_ciam)
 explore(m_ciam) 
 ```
 
-## 2c. Forest and Ecosystem Services Emulator
+## 2c. Forest Emulator, Ecosystem Services and Natural Capital GDP
 
 `ForestEmulator` (`src/components/forest_emulator.jl`) maps global mean temperature to forest area and
-ecosystem service values at the impact-region (IR) level, for 2022-2100. It is optional and does not alter
-the other components.
+ecosystem service values at the impact-region (IR) level. It is optional: when it is added, the model also
+gets `NaturalCapitalGDP` (`src/components/natural_capital_gdp.jl`), the component that adjusts GDP for the
+climate-driven change in natural capital.
 
 ```julia
 m = MimiGIVE.get_model(socioeconomics_source = :SSP, SSP_scenario = "SSP245", forest_emulator = :jules)
@@ -158,20 +168,83 @@ run(m)
 
 forest_Mha = m[:ForestEmulator, :ir_forest_Mha]   # time x IR
 value      = m[:ForestEmulator, :ir_value]        # time x IR x service (rec, hab, nwfp, wat)
+
+gdp_standard = m[:Socioeconomic, :gdp]            # GDP without natural capital
+gdp_nc       = m[:NaturalCapitalGDP, :gdp]        # GDP with natural capital (same as standard while the switch is off)
 ```
 
-**Inputs.** Temperature `T` from the FAIR `temperature` component, and population and GDP per capita from
-`Socioeconomic` and `PerCapitaGDP`. Region parameters come from `regions_jules.csv`, `regions_mc2.csv`, `regions_lpjml.csv`.
+**Inputs.** Temperature `T` from the FAIR `temperature` component, and population and GDP from
+`Socioeconomic`. The emulator reads the *unadjusted* GDP on purpose: it feeds `NaturalCapitalGDP`, so
+reading the adjusted GDP back would close a cycle. Region parameters come from `regions_jules.csv`,
+`regions_mc2.csv`, `regions_lpjml.csv`.
 
 **Equations.** With `x = T(t) - T(2022)`:
 
     F(r,t)   = min(A(r), max(0, F0(r) + b1(r)·x + b2(r)·x²))                [Mha]
+    C(r,t)   = max(0, C0(r) + c1(r)·x + c2(r)·x²)                          [tC]
     V(r,s,t) = mv(r,s) · fac(c,s,t) · F(r,t)                               [million USD2020/yr]
     fac      = (pcGDP(c,t)/pcGDP(c,2022))^e_gdp(s) · (pop(c,t)/pop(c,2022))^e_pop(s)
 
 with services s = rec, hab, nwfp, wat, `e_gdp = [0.67, 0.79, -1.11, 2.02]` and `e_pop = [0.72, 0.85, 0.57, 0.0]`.
 Vegetation carbon (`C0, c1, c2`) gives the CO2 flow `(C_t - C_{t-1})·44/12` (t CO2/yr), reported by country
 and globally. IRs with no country (`region_country = 0`) enter only the global totals.
+
+**Time span: 2022-2300.** The regional regressions are estimated on **2022-2100**. The model evaluates the
+*same quadratic* with `x = T(t) - T(2022)` after 2100, i.e. it extrapolates the calibrated response to
+2300. Two physical bounds keep the extrapolation well behaved: the forest area is capped at the region
+area `A(r)` and floored at 0, and vegetation carbon is floored at 0. Beyond 2100 the curve keeps the shape
+of the estimated response but has no independent data support, so results in 2100-2300 should be read as
+extrapolations. To run the calibrated window only, change the component's `last` from 2300 to 2100 in
+`get_model`.
+
+**Natural capital GDP.** Every GDP consumer in the model reads its GDP from `NaturalCapitalGDP` when the
+component is present: `PerCapitaGDP` (and therefore `VSL` and mortality damages), the agriculture
+population/GDP aggregators, the agriculture damages disaggregator, `energy_damages`, `dice2016R2_damage`,
+`hs_damage`, `DamageAggregator` and the global, regional and country net consumption components. The
+switch therefore moves the whole GDP chain at once between the standard GIVE GDP and the natural-capital
+one, with
+
+    gdp(t,c) = gdp_ssp(t,c) · (S_hab(t) / S_ref(t)) ^ b(c)
+
+- `gdp_ssp` is the GDP from `Socioeconomic` (SSP or RFF).
+- `S_hab(t)` is the global value of habitat services from `ForestEmulator` in the current run.
+- `S_ref(t)` is the same value in the no-climate counterfactual, i.e. with the forest area fixed at its
+  2022 level and population and GDP per capita evolving (`global_hab_value_nocl`). It is connected in
+  `get_model`, equals `S_hab` in 2022, and turns the ratio into a climate-driven natural capital index
+  (above 1 where the emulator projects forest gains, below 1 where it projects losses).
+- `b(c)` is the elasticity of GDP to natural capital, per country (`natural_capital_elasticity`). There is
+  no country-level elasticity table in `data/` yet, so the default is `0.0`, which leaves GDP unchanged
+  even with the switch on. Pass the values from your source to activate it.
+- Before 2022 the emulator has no values and the ratio is 1, so GDP is unadjusted in 2020-2021.
+
+```julia
+# GDP with natural capital, elasticity 0.1 for all countries
+m = MimiGIVE.get_model(socioeconomics_source = :SSP, SSP_scenario = "SSP245",
+                       forest_emulator = :jules,
+                       natural_capital = true, natural_capital_elasticity = 0.1)
+run(m)
+
+# Flip the switch on an already built model, no rebuild needed
+MimiGIVE.set_natural_capital!(m; use = false)
+run(m)   # GDP is back to the standard trajectory
+
+MimiGIVE.set_natural_capital!(m; use = true, elasticity = 0.1)
+run(m)
+```
+
+**Generated outputs.** `scripts/natural_capital_scc.jl` reproduces the GDP and SCC comparison for SSP245
+(JULES emulator, illustrative elasticity `b = 0.1`):
+
+```bash
+julia --project=. scripts/natural_capital_scc.jl
+```
+
+- `docs/natural_capital_gdp.csv` - world GDP per year, normal and with natural capital.
+- `docs/natural_capital_gdp_countries.csv` - the same by country in 2030, 2050, 2100, 2200 and 2300.
+- `docs/natural_capital_scc.csv` - SCC 2020 for the 12 combinations of SCC formula (`original`,
+  `forest`, `forest_nested`), forest market damages (off/on) and GDP (normal/natural capital).
+- `docs/figures/natural_capital/*.png` - one figure per combination (12 figures) with the marginal
+  damage path of a 2020 CO2 pulse and the corresponding SCC.
 
 
 

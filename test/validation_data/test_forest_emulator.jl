@@ -7,11 +7,12 @@
     ##------------------------------------------------------------------------------
     ## Configuración
     ##------------------------------------------------------------------------------
-    # Eje de tiempo de GIVE: 1750-2300. El emulador solo corre en 2022-2100,
-    # el resto de filas queda en `missing` (esperado).
+    # GIVE time axis: 1750-2300. The emulator runs 2022-2300 (the 2022-2100
+    # regressions plus extrapolation); rows before 2022 stay `missing` (expected).
+    # These checks use the calibrated window 2022-2100.
 
     years = collect(1750:2300)
-    ti    = findall(y -> 2022 <= y <= 2100, years)   # filas 273:351
+    ti    = findall(y -> 2022 <= y <= 2100, years)
     t22   = findfirst(==(2022), years)
     t100  = findfirst(==(2100), years)
     svc   = [:rec, :hab, :nwfp, :wat]                # orden de mv_cols en get_model
@@ -122,7 +123,7 @@
     ##------------------------------------------------------------------------------
 
     T    = Float64.(coalesce.(m[:ForestEmulator, :temperature], NaN))
-    pcg  = m[:ForestEmulator, :pc_gdp]
+    pcg  = m[:ForestEmulator, :gdp] ./ m[:ForestEmulator, :population] .* 1e3
     Tref = T[t22]
 
     # IR con país y bosque en 2022: 5 repartidas en la lista

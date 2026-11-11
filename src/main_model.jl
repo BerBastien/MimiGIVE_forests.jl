@@ -66,6 +66,20 @@ Get a GIVE Model with the given argument Settings
     Requires forest_emulator.
 - forest_damage_weight (default [0, 0, 1, 0]) - market damage weight per service (rec, hab, nwfp, wat).
 
+-- Natural capital --
+
+- natural_capital (default false) - the on/off switch of `NaturalCapitalGDP`, the component that
+    turns the GDP coming out of `Socioeconomic` into GDP adjusted by natural capital.
+    Every GDP consumer (PerCapitaGDP, VSL, the agriculture aggregators, energy, DICE2016R2,
+    Howard-Sterner, DamageAggregator and the net consumption components) reads GDP from
+    `NaturalCapitalGDP` whenever the model has it, so this switch moves all of them together
+    between the standard GIVE GDP and the natural-capital-adjusted GDP. Requires
+    `forest_emulator`; see `set_natural_capital!` to flip it on an already built model.
+
+- natural_capital_elasticity (default 0.0) - elasticity `b_c` of GDP to the natural capital
+    ratio, either one value for all countries or one value per country. `0.0` leaves GDP
+    unchanged even with the switch on.
+
 -- Other --
 
 - vsl (default :epa) - specify the soruce of the value of statistical life (VSL) being used in the model
@@ -80,7 +94,9 @@ function get_model(; Agriculture_gtap::String = "midDF",
                     vsl::Symbol= :epa,
                     forest_emulator::Union{Nothing, Symbol} = nothing,
                     forest_damages::Bool = false,
-                    forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0]
+                    forest_damage_weight::Vector{Float64} = [0.0, 0.0, 1.0, 0.0],
+                    natural_capital::Bool = false,
+                    natural_capital_elasticity::Union{Float64, Vector{Float64}} = 0.0
                 )
 
     # --------------------------------------------------------------------------
@@ -106,6 +122,10 @@ function get_model(; Agriculture_gtap::String = "midDF",
     # Fail early if forest damages are requested without the forest emulator
     forest_damages && isnothing(forest_emulator) &&
         error("forest_damages = true requires forest_emulator (:jules, :lpjml or :mc2)")
+
+    # Natural capital GDP needs the forest emulator to supply S_hab
+    natural_capital && isnothing(forest_emulator) &&
+        error("natural_capital = true requires forest_emulator (:jules, :lpjml or :mc2)")
 
     # --------------------------------------------------------------------------
     # MODEL - Model Data and Settings
@@ -231,9 +251,6 @@ function get_model(; Agriculture_gtap::String = "midDF",
     # Add OceanPH components
     add_comp!(m, Mimi_NAS_pH.ocean_pH, :OceanPH, after = :GlobalSLRNorm_1900);
 
-    # Add CromarMortality component
-    add_comp!(m, cromar_mortality_damages, :CromarMortality, first = damages_first, after = :OceanPH)
-
     # --------------------------------------------------------------------------
     # Natural capital GDP and forest emulator (before any GDP consumer)
     # --------------------------------------------------------------------------
@@ -255,13 +272,15 @@ function get_model(; Agriculture_gtap::String = "midDF",
         set_dimension!(m, :forest_regions, Symbol.(reg.region_id))
         set_dimension!(m, :services, [:rec, :hab, :nwfp, :wat])
 
-        # Regressions are calibrated on 2022-2300; the component uses 2022 as reference year
+        # The regressions are estimated on 2022-2100; the same quadratic is evaluated up to
+        # 2300 (extrapolation, see README section 2c and the component docstring).
         add_comp!(m, ForestEmulator, :ForestEmulator, first = 2022, last = 2300, after = :TempNorm_1995to2005)
         add_comp!(m, NaturalCapitalGDP, :NaturalCapitalGDP, first = damages_first, after = :ForestEmulator)
         add_comp!(m, PerCapitaGDP, :PerCapitaGDP, first = damages_first, after = :NaturalCapitalGDP)
         add_comp!(m, VSL, :VSL, first = damages_first, after = :PerCapitaGDP)
 
-        # ForestEmulator reads UNADJUSTED GDP from Socioeconomic (avoids a cycle)
+        # ForestEmulator reads UNADJUSTED GDP from Socioeconomic on purpose: the emulator feeds
+        # NaturalCapitalGDP, so reading the adjusted GDP here would close a cycle.
         connect_param!(m, :ForestEmulator, :temperature, :temperature, :T)
         connect_param!(m, :ForestEmulator, :population, :Socioeconomic, :population)
         connect_param!(m, :ForestEmulator, :gdp, :Socioeconomic, :gdp)
@@ -273,8 +292,18 @@ function get_model(; Agriculture_gtap::String = "midDF",
         # The backup (zeros) makes S_hab = 0 in 2020-2021, so the adjustment stays off there.
         connect_param!(m, :NaturalCapitalGDP => :S_hab, :ForestEmulator => :global_hab_value,
                zeros(length(dim_keys(m, :time))))
-        update_param!(m, :NaturalCapitalGDP, :S_ref, zeros(length(dim_keys(m, :time))))  # set by set_natural_capital_reference!
-        update_param!(m, :NaturalCapitalGDP, :b, zeros(length(countries)))              # replace with CSV later
+        # Reference natural capital: habitat value in the no-climate counterfactual (forest
+        # fixed at 2022, socioeconomics evolving), so S_hab / S_ref is the climate-driven
+        # change of natural capital and equals 1 in 2022.
+        connect_param!(m, :NaturalCapitalGDP => :S_ref, :ForestEmulator => :global_hab_value_nocl,
+               zeros(length(dim_keys(m, :time))))
+        # The switch starts off: GDP equals the Socioeconomic GDP unless natural_capital = true.
+        b_values = natural_capital_elasticity isa Number ?
+            fill(Float64(natural_capital_elasticity), length(countries)) :
+            Float64.(natural_capital_elasticity)
+        length(b_values) == length(countries) ||
+            error("natural_capital_elasticity must be a scalar or have one value per country ($(length(countries))).")
+        update_param!(m, :NaturalCapitalGDP, :b, b_values)
         update_param!(m, :NaturalCapitalGDP, :use_nc, false)
 
         # ForestEmulator parameters
@@ -312,6 +341,10 @@ function get_model(; Agriculture_gtap::String = "midDF",
         update_param!(m, :ForestEmulator, :damage_weight, forest_damage_weight)
 
     end
+
+    # CromarMortality consumes the VSL, which in the forest branch sits downstream of
+    # NaturalCapitalGDP, so it is added after that block.
+    add_comp!(m, cromar_mortality_damages, :CromarMortality, first = damages_first, after = :OceanPH)
 
     # --------------------------------------------------------------------------
     # Agriculture components
@@ -676,7 +709,7 @@ function get_model(; Agriculture_gtap::String = "midDF",
     connect_param!(m, :Agriculture_aggregator_gdp, :input_region_names, :model_ag_mapping_input_regions)
     connect_param!(m, :Agriculture_aggregator_gdp, :output_region_names, :model_ag_mapping_output_regions)
     connect_param!(m, :Agriculture_aggregator_gdp, :input_output_mapping, :model_ag_mapping)
-    connect_param!(m, :Agriculture_aggregator_gdp, :gdp, gdp_src...)
+    connect_param!(m, :Agriculture_aggregator_gdp, :input, gdp_src...)
 
     if socioeconomics_source == :RFF
         connect_param!(m, :Agriculture_aggregator_gdp90, :input_region_names, :model_ag_mapping_input_regions)
@@ -744,7 +777,7 @@ function get_model(; Agriculture_gtap::String = "midDF",
     connect_param!(m, :AgricultureDamagesDisaggregator, :fund_region_names, :model_ag_mapping_output_regions)
 
     connect_param!(m, :AgricultureDamagesDisaggregator => :gdp_fund_region, :Agriculture_aggregator_gdp => :output)
-    connect_param!(m, :AgricultureDamagesDisaggregator, :gdp, gdp_src...)
+    connect_param!(m, :AgricultureDamagesDisaggregator, :gdp_country, gdp_src...)
 
     connect_param!(m, :AgricultureDamagesDisaggregator => :damages_ag_fund_region, :Agriculture => :agcost)
 
@@ -837,5 +870,54 @@ function get_model(; Agriculture_gtap::String = "midDF",
     connect_param!(m, :country_netconsumption, :population, :Socioeconomic, :population)
     connect_param!(m, :country_netconsumption, :total_damage, :DamageAggregator, :total_damage_countries)
 
+    # Turn natural capital on if requested
+    natural_capital && set_natural_capital!(m; elasticity = natural_capital_elasticity)
+
     return m
-end 
+end
+
+"""
+    set_natural_capital!(m::Model; use::Bool = true, elasticity = nothing)
+
+Turn the natural capital adjustment of the GDP on (`use = true`) or off (`use = false`).
+It only flips the switch of `NaturalCapitalGDP`, so it can be called on an already built
+model instead of rebuilding it with `get_model`: `set_natural_capital!(m; use = false)`
+returns GDP to the standard GIVE trajectory.
+
+With the switch on, every country c and year t has
+
+    gdp(t, c) = gdp_ssp(t, c) * (S_hab(t) / S_ref(t)) ^ b(c)
+
+- `S_hab` is the global value of habitat services from `ForestEmulator` in the current run.
+- `S_ref` is the same value in the no-climate counterfactual, that is, with the forest area
+  fixed at its 2022 level and the socioeconomics evolving. It is connected in `get_model`
+  and equals `S_hab` in 2022, so the ratio is 1 then and only departs from 1 as the climate
+  changes the forest.
+- `b` is the elasticity of GDP to natural capital, per country.
+
+- `elasticity` (default nothing) - scalar or one value per country; when `nothing` the `b`
+  values already in the model (from `natural_capital_elasticity`) are kept.
+
+Before 2022 the emulator has no values and the ratio is 1, so GDP is unadjusted there.
+"""
+function set_natural_capital!(m::Model; use::Bool = true, elasticity = nothing)
+
+    haskey(m.md.namespace, :NaturalCapitalGDP) ||
+        error("The model has no NaturalCapitalGDP component. Build it with forest_emulator = :jules, :lpjml or :mc2.")
+
+    if !isnothing(elasticity)
+        n = length(dim_keys(m, :country))
+        b = elasticity isa Number ? fill(Float64(elasticity), n) : Float64.(elasticity)
+        length(b) == n || error("elasticity must be a scalar or have one value per country ($n).")
+        update_param!(m, :NaturalCapitalGDP, :b, b)
+    end
+
+    update_param!(m, :NaturalCapitalGDP, :use_nc, use)
+
+    if use && !isnothing(elasticity) && all(iszero, b)
+        @warn "natural_capital is on but every elasticity b is zero, so GDP equals the standard GIVE GDP. " *
+              "Pass `natural_capital_elasticity` (or `elasticity`) to adjust it."
+    end
+
+    return m
+end
