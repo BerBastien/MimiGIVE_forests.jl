@@ -1,5 +1,5 @@
 ﻿module MimiGIVE
-
+export get_model, set_natural_capital!
 using Mimi
 
 # External Components
