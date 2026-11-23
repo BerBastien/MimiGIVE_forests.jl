@@ -1521,26 +1521,11 @@ function _ces_u(c, e, s, θ)
 end
 
 function _scc_forest(mm::MarginalModel, D_total::Vector, gas::Symbol;
-                    year::Int, last_year::Int, eta, prtp, params)
+                     year::Int, last_year::Int, eta, prtp, params)
     yi = findfirst(isequal(year), _model_years)
     li = findfirst(isequal(last_year), _model_years)
 
     C = mm.base[:global_netconsumption, :net_cpc]
-    s = _check_utility_params(params)
-
-    # s = 0 is exactly the original GIVE formula (no forest channel).
-    if s == 0
-        num = 0.0
-        for t in yi:li
-            c_y = C[yi]; c_t = C[t]
-            (ismissing(c_y) || ismissing(c_t)) && error("Missing consumption per capita in $(_model_years[t]).")
-            md = D_total[t]
-            ismissing(md) && error("Missing marginal damages in $(_model_years[t]).")
-            num += (c_y / c_t)^eta * (1 + prtp)^(-(_model_years[t] - year)) * md
-        end
-        return num
-    end
-
     θ = get(params, :θ, 0.0)
     E, MD_E = _forest_components(mm, gas, params; services = _FOREST_MARKET)
 
@@ -1550,13 +1535,14 @@ function _scc_forest(mm::MarginalModel, D_total::Vector, gas::Symbol;
 
     for t in yi:li
         c = C[t]; e = E[t]
-        (ismissing(c) || c <= 0) && error("Consumption per capita must be positive for the CES utility (year $(_model_years[t])).")
-        e > 0 || error("Ecosystem services per capita must be positive for the CES utility (year $(_model_years[t])).")
-        u = _ces_u(c, e, s, θ)
+        (ismissing(c) || c <= 0) && error("Consumption per capita must be positive (year $(_model_years[t])).")
+        e > 0 || error("Ecosystem services per capita must be positive (year $(_model_years[t])).")
+
+        # U = [(1-s)C^θ + sE^θ]^(1/θ) con (1-s) = 1 (s = 0 donde resta) y s = 1 (donde multiplica)
+        u = (1.0 * c^θ + 1.0 * e^θ)^(1 / θ)
         U[t]  = u
-        # Also valid at θ = 0: c^(θ-1) u^(1-θ) → u/c, and e^(θ-1) u^(1-θ) → u/e
-        μC[t] = (1 - s) * c^(θ - 1) * u^(1 - θ)
-        μE[t] = s * e^(θ - 1) * u^(1 - θ)
+        μC[t] = 1.0 * c^(θ - 1) * u^(1 - θ)
+        μE[t] = 1.0 * e^(θ - 1) * u^(1 - θ)
     end
 
     num = 0.0
@@ -1568,8 +1554,10 @@ function _scc_forest(mm::MarginalModel, D_total::Vector, gas::Symbol;
                (μC[t] * md_c + μE[t] * MD_E[t])
     end
 
+    # Igual que forest_nested: se normaliza por μC[yi], así el SCC queda en dólares.
     return num / μC[yi]
 end
+
 function _scc_forest_nested(
     mm::MarginalModel,
     D_total::Vector,
@@ -1584,39 +1572,12 @@ function _scc_forest_nested(
     li = findfirst(isequal(last_year), _model_years)
 
     C = mm.base[:global_netconsumption, :net_cpc]
-    s  = _check_utility_params(params)
-    s2 = get(params, :forest, true) ? get(params, :s2, 0.0) : 0.0
-    (0 <= s2 < 1) || error("The CES share `s2` must satisfy 0 <= s2 < 1 (got $s2).")
-
-    # With s = 0 the utility is U = C, so the SCC is the original GIVE one.
-    if s == 0
-        num = 0.0
-        for t in yi:li
-            c_y = C[yi]; c_t = C[t]
-            (ismissing(c_y) || ismissing(c_t)) && error("Missing consumption per capita in $(_model_years[t]).")
-            md = D_total[t]
-            ismissing(md) && error("Missing marginal damages in $(_model_years[t]).")
-            num += (c_y / c_t)^eta * (1 + prtp)^(-(_model_years[t] - year)) * md
-        end
-        return num
-    end
-    
     θ  = get(params, :θ, 0.0)
     θ2 = get(params, :θ2, 0.0)
 
-    # E_u: no mercado (hab). E_nu: mercado (rec, wat).
+    # E_u: no mercado (hábitat). E_nu: mercado (recreación, agua).
     E_u,  MD_Eu  = _forest_components(mm, gas, params; services = _FOREST_NONMARKET)
     E_nu, MD_Enu = _forest_components(mm, gas, params; services = _FOREST_MARKET)
-
-    # Las derivadas μEu y μEnu tienen exponente θ2 - 1, que diverge en cero si θ2 < 1.
-    all(>(0), E_u[yi:li]) || error(
-        "Non-market forest services must be strictly positive between $year and $last_year.")
-
-    if s2 > 0 && θ2 < 1
-        all(>(0), E_nu[yi:li]) || error(
-            "Market forest services must be strictly positive when s2 > 0 and θ2 < 1 " *
-            "(the marginal utility ∂X/∂E_nu diverges at zero).")
-    end
 
     n = length(_model_years)
     U    = zeros(n)
@@ -1630,22 +1591,22 @@ function _scc_forest_nested(
         c   = C[t]
         eu  = E_u[t]
         enu = E_nu[t]
-        (ismissing(c) || c <= 0) && error("Consumption per capita must be positive for the CES utility (year $(_model_years[t])).")
-        eu > 0 || error("Non-market forest services must be positive (year $(_model_years[t])).")
-        (s2 == 0 || enu > 0) || error("Market forest services must be positive when s2 > 0 (year $(_model_years[t])).")
+        (ismissing(c) || c <= 0) && error("Consumo per cápita debe ser positivo (año $(_model_years[t])).")
+        (eu > 0 && enu > 0) || error("Servicios forestales deben ser positivos (año $(_model_years[t])).")
 
-        # X = [(1-s2) E_u^θ2 + s2 E_nu^θ2]^(1/θ2)
-        x = _ces_u(eu, enu, s2, θ2)
-        # U = [(1-s) C^θ + s X^θ]^(1/θ)
-        u = _ces_u(c, x, s, θ)
+        # X = [(1 - s2)·E_u^θ2 + s2·E_nu^θ2]^(1/θ2), con s2 = 0 en (1 - s2) y s2 = 1 en el producto
+        x = (1.0 * eu^θ2 + 1.0 * enu^θ2)^(1 / θ2)
+
+        # U = [(1 - s)·C^θ + s·X^θ]^(1/θ), con s = 0 en (1 - s) y s = 1 en el producto
+        u = (1.0 * c^θ + 1.0 * x^θ)^(1 / θ)
 
         X[t] = x
         U[t] = u
 
-        μC[t]   = (1 - s) * c^(θ - 1) * u^(1 - θ)
-        μX[t]   = s * x^(θ - 1) * u^(1 - θ)
-        μEu[t]  = (1 - s2) * eu^(θ2 - 1) * x^(1 - θ2)
-        μEnu[t] = s2 == 0 ? 0.0 : s2 * enu^(θ2 - 1) * x^(1 - θ2)
+        μC[t]   = 1.0 * c^(θ - 1)   * u^(1 - θ)
+        μX[t]   = 1.0 * x^(θ - 1)   * u^(1 - θ)
+        μEu[t]  = 1.0 * eu^(θ2 - 1) * x^(1 - θ2)
+        μEnu[t] = 1.0 * enu^(θ2 - 1) * x^(1 - θ2)
     end
 
     num = 0.0
