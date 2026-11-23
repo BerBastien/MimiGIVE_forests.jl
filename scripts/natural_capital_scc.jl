@@ -13,9 +13,7 @@
 #   docs/natural_capital_scc.csv           SCC 2020 for the 12 combinations of
 #                                          SCC formula, forest market damages and
 #                                          GDP definition
-#   docs/figures/natural_capital/*.png     12 figures, one per combination, with
-#                                          the marginal damage path of a 2020 CO2
-#                                          pulse and the corresponding SCC
+#   docs/figures/natural_capital/*.png     12 figures, one per combination
 #
 # The 12 combinations are
 #
@@ -23,20 +21,22 @@
 #   forest_damages   = false, true        (market forest damages in consumption)
 #   natural_capital  = false, true        (standard GDP vs natural capital GDP)
 #
-# Elasticity of GDP to natural capital: b = 0.1 for every country. There is no
-# country-level elasticity table in data/ yet, so this value is illustrative and
-# it is written into the outputs so the numbers are reproducible.
+# Elasticity of GDP to natural capital b: by macroregion (OECD, LAM, MAF, ASIA,
+# REF) from Bastien-Olvera et al. (Nature 2024), see scripts/b_por_region.jl.
 # ------------------------------------------------------------------------------
 
 using MimiGIVE, Mimi, CSV, DataFrames, CairoMakie, Printf
+
+include(joinpath(@__DIR__, "b_por_region.jl"))
 
 const ROOT   = normpath(joinpath(@__DIR__, ".."))
 const DOCS   = joinpath(ROOT, "docs")
 const FIGDIR = joinpath(DOCS, "figures", "natural_capital")
 
-const SCENARIO = "SSP245"
-const EMULATOR = :jules
-const ELASTICITY = 0.1
+const SCENARIO   = "SSP245"
+const EMULATOR   = :jules
+const B_LABEL    = "paper_regional"          # etiqueta en las salidas
+const B_VEC      = b_vector(ROOT)            # un valor por país, orden de get_model
 const PULSE_YEAR = 2020
 const ETA  = 1.45
 const PRTP = 0.015
@@ -67,7 +67,7 @@ function build_models()
         m = MimiGIVE.get_model(; BASE_ARGS...,
                                forest_damages = fd,
                                natural_capital = nc,
-                               natural_capital_elasticity = ELASTICITY)
+                               natural_capital_elasticity = B_VEC)
         run(m)
         models[(fd, nc)] = m
     end
@@ -81,7 +81,7 @@ function write_gdp_tables(models)
     m = models[(false, true)]      # forest damages do not change GDP
     years = collect(Mimi.time_labels(m))
     ti = findall(y -> 2020 <= y <= 2300, years)
-    countries = String.(Mimi.dim_keys(m, :country))
+    model_countries = String.(Mimi.dim_keys(m, :country))
 
     gdp_ssp = m[:Socioeconomic, :gdp]
     gdp_nc  = m[:NaturalCapitalGDP, :gdp]
@@ -100,7 +100,7 @@ function write_gdp_tables(models)
                      gdp_natural_capital = Float64[])
     for y in show_years
         i = findfirst(==(y), years)
-        for (c, iso) in enumerate(countries)
+        for (c, iso) in enumerate(model_countries)
             push!(rows, (year = y, iso3 = iso,
                          gdp_normal = coalesce(gdp_ssp[i, c], 0.0),
                          gdp_natural_capital = coalesce(gdp_nc[i, c], 0.0)))
@@ -116,7 +116,7 @@ end
 
 function compute_scc_table(models)
     rows = DataFrame(method = String[], forest_damages = Bool[],
-                     natural_capital = Bool[], elasticity = Float64[],
+                     natural_capital = Bool[], elasticity = String[],
                      scc_usd2005_per_tco2 = Float64[])
     for method in METHODS
         for fd in (false, true), nc in (false, true)
@@ -125,7 +125,8 @@ function compute_scc_table(models)
             scc = MimiGIVE.compute_scc(m; year = PULSE_YEAR, eta = ETA, prtp = PRTP,
                                        method = method, params = params_for(method))
             push!(rows, (method = String(method), forest_damages = fd,
-                         natural_capital = nc, elasticity = ELASTICITY,
+                         natural_capital = nc,
+                         elasticity = nc ? B_LABEL : "not applicable",
                          scc_usd2005_per_tco2 = scc))
         end
     end
@@ -212,7 +213,7 @@ function main()
                 round(r.ratio, digits = 5))
     end
 
-    println("\nSCC 2020 (USD2005/tCO2), SSP245 + $(EMULATOR), b = $(ELASTICITY)")
+    println("\nSCC 2020 (USD2005/tCO2), SSP245 + $(EMULATOR), b = $(B_LABEL)")
     println(rpad("formula", 15), rpad("forest dmg", 12), rpad("GDP", 18), "SCC")
     for row in eachrow(sccs)
         println(rpad(row.method, 15), rpad(label(row.forest_damages), 12),
